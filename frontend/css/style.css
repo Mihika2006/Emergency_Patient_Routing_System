@@ -1,0 +1,447 @@
+/* =========================================================================
+   RET-RP shared styles
+   Design concept: a night-shift dispatch command center. Vitals are set in
+   a monospaced face (the way an ICU monitor renders numbers), UI chrome in
+   a clean grotesque. Slate-navy surfaces, teal for nominal/calm state,
+   amber for caution, red for critical -- reserved ONLY for genuine alerts
+   so it keeps its urgency.
+   ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
+
+:root {
+  --navy-950: #0a0e16;
+  --navy-900: #0f1621;
+  --navy-800: #161f2e;
+  --navy-700: #1f2b3d;
+  --navy-600: #2a3a52;
+  --slate-400: #8296b0;
+  --slate-200: #cdd7e3;
+  --white: #f4f7fb;
+
+  --teal: #2dd4bf;
+  --teal-dim: #164e46;
+  --amber: #f5a524;
+  --amber-dim: #4a3510;
+  --red: #f24455;
+  --red-dim: #4a1620;
+  --red-bright: #ff5468;
+
+  --font-ui: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', monospace;
+
+  --radius: 10px;
+  --shadow-panel: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--navy-950);
+  color: var(--white);
+  font-family: var(--font-ui);
+  min-height: 100%;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 15% 0%, rgba(45,212,191,0.06), transparent 40%),
+    radial-gradient(circle at 85% 100%, rgba(242,68,85,0.05), transparent 45%);
+}
+
+a { color: inherit; }
+
+::selection { background: var(--teal); color: var(--navy-950); }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--navy-700);
+  background: linear-gradient(180deg, var(--navy-900), var(--navy-950));
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.brand .mark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--teal);
+  letter-spacing: 0.02em;
+}
+
+.brand .portal-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--slate-200);
+}
+
+.topbar .status-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--slate-400);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--slate-400);
+  flex-shrink: 0;
+}
+.dot.live { background: var(--teal); box-shadow: 0 0 0 3px rgba(45,212,191,0.18); }
+.dot.offline { background: var(--red); box-shadow: 0 0 0 3px rgba(242,68,85,0.18); }
+
+/* ---------- Layout ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  padding: 16px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+.col { display: flex; flex-direction: column; gap: 16px; }
+
+.panel {
+  background: var(--navy-800);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-panel);
+  padding: 18px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.panel-head h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--slate-400);
+  margin: 0;
+  font-weight: 600;
+}
+
+/* ---------- Map ---------- */
+#map {
+  width: 100%;
+  height: 420px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--navy-900);
+}
+.leaflet-container { background: var(--navy-900) !important; font-family: var(--font-ui); }
+.leaflet-control-attribution { background: rgba(10,14,22,0.7) !important; color: var(--slate-400) !important; font-size: 10px; }
+.leaflet-control-attribution a { color: var(--slate-400) !important; }
+
+/* ---------- Vitals ---------- */
+.vitals-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.vital-tile {
+  background: var(--navy-900);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.vital-tile .label {
+  font-size: 11px;
+  color: var(--slate-400);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.vital-tile .value {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+.vital-tile .value .unit { font-size: 14px; color: var(--slate-400); font-weight: 500; margin-left: 4px; }
+
+.vital-tile.normal .value { color: var(--teal); }
+.vital-tile.warning .value { color: var(--amber); }
+.vital-tile.critical .value { color: var(--red-bright); }
+
+/* ---------- Risk badge ---------- */
+.risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: 0.03em;
+}
+.risk-badge.Green  { background: var(--teal-dim); color: var(--teal); }
+.risk-badge.Yellow { background: var(--amber-dim); color: var(--amber); }
+.risk-badge.Red    { background: var(--red-dim); color: var(--red-bright); animation: pulse-red 1.4s infinite; }
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(242,68,85,0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(242,68,85,0); }
+}
+
+/* ---------- Buttons & inputs ---------- */
+button {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--navy-600);
+  background: var(--navy-700);
+  color: var(--white);
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+button:hover { background: var(--navy-600); }
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+button.primary { background: var(--teal); border-color: var(--teal); color: var(--navy-950); }
+button.primary:hover { background: #26c4b0; }
+
+button.danger { background: var(--red); border-color: var(--red); color: var(--white); }
+button.danger:hover { background: #d93a49; }
+
+button.block { width: 100%; }
+
+label {
+  font-size: 12px;
+  color: var(--slate-400);
+  display: block;
+  margin-bottom: 6px;
+}
+
+input[type="text"], input[type="number"], select {
+  width: 100%;
+  background: var(--navy-900);
+  border: 1px solid var(--navy-700);
+  color: var(--white);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+input[type="range"] { width: 100%; accent-color: var(--teal); }
+
+.field { margin-bottom: 14px; }
+.row { display: flex; gap: 10px; }
+.row > * { flex: 1; }
+
+/* ---------- Toggle switch ---------- */
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+}
+.switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider {
+  position: absolute; inset: 0;
+  background: var(--navy-600);
+  border-radius: 100px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 18px; width: 18px;
+  left: 3px; top: 3px;
+  background: var(--slate-200);
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+input:checked + .slider { background: var(--teal); }
+input:checked + .slider::before { transform: translateX(20px); background: var(--navy-950); }
+
+/* ---------- Log / list ---------- */
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.log-item {
+  font-size: 12.5px;
+  color: var(--slate-400);
+  border-left: 2px solid var(--navy-600);
+  padding-left: 10px;
+}
+.log-item .t { color: var(--slate-200); font-family: var(--font-mono); font-size: 11px; }
+.log-item.alert { border-left-color: var(--red); color: var(--red-bright); }
+
+/* ---------- Hospital / ambulance cards ---------- */
+.card-list { display: flex; flex-direction: column; gap: 10px; }
+
+.hcard {
+  background: var(--navy-900);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.hcard-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.hcard-top .name { font-weight: 600; font-size: 14.5px; }
+.hcard-top .tier { font-size: 11px; color: var(--slate-400); font-family: var(--font-mono); }
+
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 100px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.pill.ready { background: var(--teal-dim); color: var(--teal); }
+.pill.diverting { background: var(--red-dim); color: var(--red-bright); }
+
+.hcard-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12.5px;
+  color: var(--slate-400);
+}
+.hcard-meta b { color: var(--white); font-family: var(--font-mono); }
+
+/* ---------- Incoming ambulance ticket ---------- */
+.eta-ticket {
+  background: var(--navy-900);
+  border: 1px solid var(--navy-700);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.eta-ticket.diverted { border-color: var(--red); background: linear-gradient(180deg, var(--red-dim), var(--navy-900) 60%); }
+
+.eta-big {
+  font-family: var(--font-mono);
+  font-size: 42px;
+  font-weight: 700;
+  color: var(--teal);
+  line-height: 1;
+}
+.eta-ticket.diverted .eta-big { color: var(--red-bright); }
+.eta-big .unit { font-size: 15px; color: var(--slate-400); margin-left: 6px; font-weight: 500; }
+
+/* ---------- Modal (reroute prompt) ---------- */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(5,8,14,0.7);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(2px);
+}
+.modal-backdrop.show { display: flex; }
+
+.modal {
+  width: min(440px, 90vw);
+  background: var(--navy-800);
+  border: 1px solid var(--red);
+  border-radius: 14px;
+  padding: 26px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  text-align: center;
+}
+.modal .siren {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--red-bright);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  animation: pulse-red 1.2s infinite;
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 100px;
+  background: var(--red-dim);
+  margin-bottom: 14px;
+}
+.modal h3 { margin: 0 0 6px; font-size: 20px; }
+.modal p { color: var(--slate-400); font-size: 14px; margin: 0 0 20px; }
+.modal .modal-actions { display: flex; gap: 10px; }
+
+.small-muted { font-size: 12px; color: var(--slate-400); }
+
+.empty-state {
+  text-align: center;
+  color: var(--slate-400);
+  font-size: 13px;
+  padding: 24px 0;
+}
+
+/* Landing page */
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  max-width: 1000px;
+  margin: 60px auto;
+  padding: 0 20px;
+}
+@media (max-width: 800px) { .portal-grid { grid-template-columns: 1fr; } }
+
+.portal-card {
+  background: var(--navy-800);
+  border: 1px solid var(--navy-700);
+  border-radius: 14px;
+  padding: 28px 24px;
+  text-decoration: none;
+  display: block;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.portal-card:hover { border-color: var(--teal); transform: translateY(-2px); }
+.portal-card .tag { font-family: var(--font-mono); font-size: 11px; color: var(--teal); letter-spacing: 0.06em; }
+.portal-card h3 { font-size: 19px; margin: 10px 0 8px; color: var(--white); }
+.portal-card p { font-size: 13.5px; color: var(--slate-400); line-height: 1.5; margin: 0; }
+
+.hero {
+  text-align: center;
+  padding-top: 70px;
+}
+.hero .mark { font-family: var(--font-mono); color: var(--teal); font-size: 14px; letter-spacing: 0.08em; }
+.hero h1 { font-size: 32px; margin: 12px 0 8px; }
+.hero p { color: var(--slate-400); font-size: 15px; }

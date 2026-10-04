@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RET-RP &middot; Hospital ER Command Center</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="mark">RET-RP</span>
+    <span class="portal-name">Hospital ER Command Center</span>
+  </div>
+  <div class="status-chip" id="connStatus"><span class="dot"></span> Not connected</div>
+</div>
+
+<div class="layout">
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><h2>Incident Map</h2></div>
+      <div id="map"></div>
+    </div>
+
+    <div class="panel eta-ticket" id="etaPanel" style="display:none;">
+      <div class="panel-head"><h2>Incoming Ambulance</h2></div>
+      <div class="eta-big" id="etaValue">--<span class="unit">min ETA</span></div>
+      <div class="small-muted" id="etaSub">--</div>
+    </div>
+
+    <div class="panel" id="patientPanel" style="display:none;">
+      <div class="panel-head"><h2>Incoming Patient</h2></div>
+      <div class="hcard">
+        <div class="hcard-top">
+          <span class="name" id="patientName">--</span>
+          <span class="pill ready" id="patientTriage">Stable</span>
+        </div>
+        <div class="small-muted" id="patientMeta">--</div>
+        <div class="hcard-meta" style="margin-top:8px;">
+          <span>Required equipment: <b id="patientEquip">None flagged</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="vitalsPanel" style="display:none;">
+      <div class="panel-head">
+        <h2>Live Patient Telemetry</h2>
+        <span class="risk-badge Green" id="vRisk">GREEN</span>
+      </div>
+      <div class="vitals-grid">
+        <div class="vital-tile normal"><div class="label">Heart Rate</div><div class="value"><span id="vHr">--</span><span class="unit">bpm</span></div></div>
+        <div class="vital-tile normal"><div class="label">SpO2</div><div class="value"><span id="vSpo2">--</span><span class="unit">%</span></div></div>
+        <div class="vital-tile normal" style="grid-column: span 2;"><div class="label">Blood Pressure</div><div class="value"><span id="vBp">--</span><span class="unit">mmHg</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><h2>This Dashboard Represents</h2></div>
+      <div class="field">
+        <label>Hospital</label>
+        <select id="hospitalSelect">
+          <option value="H1">City General Hospital (MICU)</option>
+          <option value="H2">St. Anne's Trauma Center (ALS)</option>
+          <option value="H3">Riverside Community Hospital (BLS)</option>
+        </select>
+      </div>
+      <button class="primary block" id="connectBtn">Connect Dashboard</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Bed &amp; Trauma Bay Readiness</h2></div>
+      <div class="field">
+        <label>ICU beds available</label>
+        <input type="number" id="icuBeds" min="0" max="20" value="0" />
+      </div>
+      <div class="switch-row">
+        <div style="font-weight:600; font-size:14px;">Cath lab available</div>
+        <label class="switch"><input type="checkbox" id="cathLab" /><span class="slider"></span></label>
+      </div>
+      <div class="switch-row">
+        <div style="font-weight:600; font-size:14px;">Ventilator available</div>
+        <label class="switch"><input type="checkbox" id="ventilator" /><span class="slider"></span></label>
+      </div>
+      <div class="field" style="margin-top:10px;">
+        <label>Overall status</label>
+        <select id="readinessStatus"><option>Ready</option><option>Diverting</option></select>
+      </div>
+      <button class="block" id="saveReadinessBtn">Save Readiness</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Regional Fleet-Agnostic Overview</h2></div>
+      <div class="card-list" id="regionalList"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Incident Log</h2></div>
+      <div class="log-list" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>window.RET_RP_API_BASE = "http://localhost:8000";</script>
+<script src="js/api.js"></script>
+<script src="js/hospital.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RET-RP &middot; Paramedic Console</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="mark">RET-RP</span>
+    <span class="portal-name">Paramedic Console</span>
+  </div>
+  <div class="status-chip" id="sessionBadge">No trip linked</div>
+</div>
+
+<div class="layout">
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Patient Vitals</h2>
+        <span class="risk-badge Green" id="riskBadge">GREEN</span>
+      </div>
+      <div class="vitals-grid">
+        <div class="vital-tile normal" id="tileHr">
+          <div class="label">Heart Rate</div>
+          <div class="value">82<span class="unit">bpm</span></div>
+        </div>
+        <div class="vital-tile normal" id="tileSpo2">
+          <div class="label">SpO2</div>
+          <div class="value">98<span class="unit">%</span></div>
+        </div>
+        <div class="vital-tile normal" id="tileSbp">
+          <div class="label">Blood Pressure</div>
+          <div class="value">118/76<span class="unit">mmHg</span></div>
+        </div>
+        <div class="vital-tile normal">
+          <div class="label">Triage Priority</div>
+          <div class="value" style="font-size:22px;" id="triageLabel">Stable</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Manual Vitals Input</h2></div>
+      <div class="field">
+        <label>Heart rate: <span id="hrVal"></span></label>
+        <input type="range" id="hr" min="40" max="200" value="82" />
+      </div>
+      <div class="field">
+        <label>SpO2: <span id="spo2Val"></span></label>
+        <input type="range" id="spo2" min="70" max="100" value="98" />
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Systolic BP: <span id="sbpVal"></span></label>
+          <input type="range" id="sbp" min="60" max="220" value="118" />
+        </div>
+        <div class="field">
+          <label>Diastolic BP: <span id="dbpVal"></span></label>
+          <input type="range" id="dbp" min="40" max="140" value="76" />
+        </div>
+      </div>
+      <button class="primary block" id="sendVitalsBtn">Sync Vitals to Hospital</button>
+
+      <div class="switch-row">
+        <div>
+          <div style="font-weight:600; font-size:14px;">Auto-stream vitals</div>
+          <div class="small-muted" id="autoStreamStatus">Manual entry</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoStreamToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <button class="danger block" id="manualTriggerBtn">🚨 Manual Emergency Reroute Trigger</button>
+      <p class="small-muted" style="margin-top:8px;">Paramedic.triggerManualReroute() -- use when a patient shows physical distress not yet reflected in streamed vitals. The driver still must confirm before the destination changes.</p>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <div class="panel-head"><h2>Session</h2></div>
+      <div class="field">
+        <label>Active Trip ID (from Driver console)</label>
+        <input type="text" id="sessionIdIn" placeholder="e.g. AMB-482913" />
+      </div>
+      <button class="block" id="loadSessionBtn">Link Session</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>BLE Sensor</h2></div>
+      <div class="small-muted" id="bleStatus">Not connected</div>
+      <button class="block" id="bleBtn" style="margin-top:10px;">Connect BLE Sensor</button>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><h2>Activity Log</h2></div>
+      <div class="log-list" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>window.RET_RP_API_BASE = "http://localhost:8000";</script>
+<script src="js/api.js"></script>
+<script src="js/paramedic.js"></script>
+</body>
+</html>
