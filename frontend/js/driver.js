@@ -1,345 +1,246 @@
+// ==============================================================================
+// FILE: frontend/js/driver.js
+// ==============================================================================
+/**
+ * Driver Console Script
+ * - Uses Real Geolocation with Indore fallback (22.7196, 75.8577)
+ * - Queries OSRM for realistic road curvature geometry
+ * - Implements 1-Tap audio-visual reroute prompt modal (US-15, US-16, US-17)
+ * - Synchronizes arrival handover event at final route coordinate
+ */
 
-let map, routeLine, ambulanceMarker;
-let graph = null;
-let state = {
-  vehicleId: null,
-  tripId: null,
-  route: null,         // {path, polyline, eta_minutes}
-  stepIndex: 0,
-  running: false,
-  timer: null,
-  destinationId: null,
-  pendingProposal: null,
-  paused: false,        // true while a reroute decision is awaited (requirement 2)
-};
+let map, ambulanceMarker, destinationMarker, routePolyline;
+let activeRoutePoints = [];
+let currentIndex = 0;
+let isNavigating = false;
+let navInterval = null;
 
-const els = {};
+const INDORE_FALLBACK = [22.7196, 75.8577];
+let currentCoords = [...INDORE_FALLBACK];
+let currentHospital = null;
+let hospitalsList = [];
+
+const socket = io();
 
 document.addEventListener("DOMContentLoaded", async () => {
-  cacheEls();
   initMap();
-  await loadGraph();
-  bindUI();
-  setInterval(() => Api.post("/api/traffic/refresh").catch(() => {}), 30000);
-  logEvent("Driver console ready. Register a vehicle to begin.");
+  detectLiveLocation();
+  await loadHospitals();
+
+  document.getElementById("btn-start-nav").addEventListener("click", startNavigation);
+  document.getElementById("btn-stop-nav").addEventListener("click", stopNavigation);
+  document.getElementById("btn-accept-reroute").addEventListener("click", () => respondReroute(true));
+  document.getElementById("btn-decline-reroute").addEventListener("click", () => respondReroute(false));
+
+  setupSocketListeners();
 });
 
-function cacheEls() {
-  ["vehicleId", "driverName", "fleetType", "capabilityTier", "destHospital",
-   "patientName", "patientAge", "chiefComplaint",
-   "registerBtn", "startSessionBtn", "sessionInfo", "sessionIdOut",
-   "simToggle", "simStatus", "speedSlider", "speedVal", "progressFill",
-   "progressText", "currentNodeLabel", "etaLabel", "rerouteBanner",
-   "log", "modalBackdrop", "modalMessage", "modalEta", "acceptBtn", "overrideBtn", "overrideReason",
-  ].forEach(id => els[id] = document.getElementById(id));
-}
-
 function initMap() {
-  map = L.map("map", { zoomControl: true, attributionControl: true }).setView([22.7250, 75.8700], 13);
-  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  map = L.map("map").setView(INDORE_FALLBACK, 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USGS, TomTom'
+    attribution: "© OpenStreetMap contributors"
   }).addTo(map);
+
+  const ambIcon = L.divIcon({
+    className: "amb-leaflet-icon",
+    html: "<div style='background-color:#ef4444;width:18px;height:18px;border-radius:50%;border:3px solid white;box-shadow:0 0 8px rgba(0,0,0,0.5);'></div>",
+    iconSize: [20, 20],
+    iconAnchor: [10, 10]
+  });
+
+  ambulanceMarker = L.marker(INDORE_FALLBACK, { icon: ambIcon }).addTo(map);
 }
 
-// FIXED: Added safe null-coalescing for label / name so undefined label will never throw
-async function loadGraph() {
-  try {
-    // 1. Fetch graph and hospitals in parallel
-    const [graphData, hospitalsData] = await Promise.all([
-      Api.get("/api/graph"),
-      Api.get("/api/hospitals")
-    ]);
-    
-    graph = graphData;
-
-    if (!graph || !graph.nodes) return;
-
-    // Collect list of hospital node keys
-    let hospitalNodeKeys = [];
-    if (Array.isArray(graph.hospital_nodes)) {
-      hospitalNodeKeys = graph.hospital_nodes;
-    } else if (graph.hospital_nodes && typeof graph.hospital_nodes === 'object') {
-      hospitalNodeKeys = Object.values(graph.hospital_nodes);
-    }
-
-    // Render road nodes & hospital markers
-    Object.entries(graph.nodes).forEach(([id, n]) => {
-      if (!n) return;
-      const isHospital = hospitalNodeKeys.includes(id) || ['D', 'J', 'M', 'H1', 'H2', 'H3'].includes(id);
-      const labelText = n.label || n.name || id;
-
-      L.circleMarker([n.lat, n.lng], {
-        radius: isHospital ? 8 : 4,
-        color: isHospital ? "#f24455" : "#2a3a52",
-        fillColor: isHospital ? "#f24455" : "#8296b0",
-        fillOpacity: 0.9,
-        weight: isHospital ? 2.5 : 1.5,
-      }).addTo(map).bindTooltip(labelText, { direction: "top" });
-    });
-
-    // 2. Populate the Primary Destination Hospital dropdown
-    if (els.destHospital) {
-      els.destHospital.innerHTML = "";
-      
-      const hospitalList = hospitalsData ? Object.values(hospitalsData) : [];
-      
-      if (hospitalList.length > 0) {
-        hospitalList.forEach(h => {
-          const opt = document.createElement("option");
-          opt.value = h.id || h.hospital_id;
-          opt.textContent = `${h.name}`;
-          els.destHospital.appendChild(opt);
-        });
-      } else {
-        // Fallback directly from graph nodes if hospitals endpoint is empty
-        const fallbackIds = ['D', 'J', 'M'];
-        fallbackIds.forEach(hid => {
-          if (graph.nodes[hid]) {
-            const opt = document.createElement("option");
-            opt.value = hid;
-            opt.textContent = graph.nodes[hid].label || hid;
-            els.destHospital.appendChild(opt);
-          }
-        });
-      }
-    }
-    
-    logEvent("Loaded Indore road network and hospitals.");
-  } catch (err) {
-    logEvent("Failed to load map network: " + err.message, true);
-  }
-}
-
-function bindUI() {
-  if (els.registerBtn) {
-    els.registerBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onRegister(e);
-    });
-  }
-  if (els.startSessionBtn) {
-    els.startSessionBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      onStartSession(e);
-    });
-  }
-  if (els.simToggle) els.simToggle.addEventListener("change", onToggleSim);
-  if (els.speedSlider) {
-    els.speedSlider.addEventListener("input", () => {
-      if (els.speedVal) els.speedVal.textContent = els.speedSlider.value + " km/h";
-    });
-  }
-  if (els.acceptBtn) els.acceptBtn.addEventListener("click", onConfirmDiversion);
-  if (els.overrideBtn) els.overrideBtn.addEventListener("click", onOverrideDiversion);
-}
-
-// FIXED: e.preventDefault() added to prevent form submission from reloading the page
-async function onRegister(e) {
-  if (e) e.preventDefault();
-  const vehicleId = els.vehicleId ? els.vehicleId.value.trim() : "";
-  if (!vehicleId) return alert("Enter a vehicle ID, e.g. AMB-07");
-
-  try {
-    await Api.post("/api/vehicles/register", {
-      vehicle_id: vehicleId,
-      fleet_type: els.fleetType ? els.fleetType.value : "Public",
-      capability_tier: els.capabilityTier ? els.capabilityTier.value : "ALS",
-      driver_name: (els.driverName && els.driverName.value.trim()) || null,
-    });
-    state.vehicleId = vehicleId;
-    if (els.startSessionBtn) els.startSessionBtn.disabled = false;
-    logEvent(`Vehicle ${vehicleId} registered (${els.capabilityTier ? els.capabilityTier.value : "ALS"}).`);
-    connectDriverSocket(vehicleId);
-  } catch (err) {
-    logEvent("Registration failed: " + err.message, true);
-  }
-}
-
-// FIXED: e.preventDefault() added and null checks on graph node labels
-async function onStartSession(e) {
-  if (e) e.preventDefault();
-  if (!state.vehicleId) return;
-  const destinationId = els.destHospital ? els.destHospital.value : null;
-  if (!destinationId) return alert("Select a destination hospital.");
-
-  try {
-    const trip = await Api.post("/api/session/start", {
-      vehicle_id: state.vehicleId,
-      destination_hospital_id: destinationId,
-      patient_name: (els.patientName && els.patientName.value.trim()) || "Unknown",
-      age: (els.patientAge && els.patientAge.value) ? Number(els.patientAge.value) : null,
-      chief_complaint: els.chiefComplaint ? els.chiefComplaint.value.trim() : "",
-    });
-
-    state.tripId = trip.trip_id;
-    state.route = trip.route;
-    state.stepIndex = 0;
-    state.destinationId = destinationId;
-
-    if (els.sessionInfo) els.sessionInfo.style.display = "block";
-    if (els.sessionIdOut) els.sessionIdOut.textContent = trip.trip_id;
-    if (els.etaLabel) els.etaLabel.textContent = trip.route.eta_minutes.toFixed(1);
-
-    drawRoute(trip.route.polyline);
-    updateProgress();
-
-    const destLabel = (graph.nodes[destinationId] && (graph.nodes[destinationId].label || graph.nodes[destinationId].name)) || destinationId;
-    const equip = (trip.patient && trip.patient.required_equipment && trip.patient.required_equipment.length)
-      ? ` (needs: ${trip.patient.required_equipment.join(", ")})`
-      : "";
-    logEvent(`Trip ${trip.trip_id} started -> ${destLabel}${equip}. ETA ${trip.route.eta_minutes.toFixed(1)} min.`);
-  } catch (err) {
-    logEvent("Failed to start session: " + err.message, true);
-  }
-}
-
-function drawRoute(polyline, dashed = false) {
-  if (!polyline || !polyline.length) return;
-  if (routeLine) map.removeLayer(routeLine);
-  const latlngs = polyline.map(p => [p.lat, p.lng]);
-  routeLine = L.polyline(latlngs, {
-    color: dashed ? "#f24455" : "#2dd4bf",
-    weight: 4,
-    opacity: 0.85,
-    dashArray: dashed ? "8 6" : null,
-  }).addTo(map);
-  map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
-
-  if (!dashed || !ambulanceMarker) {
-    if (ambulanceMarker) map.removeLayer(ambulanceMarker);
-    const start = polyline[0];
-    ambulanceMarker = L.marker([start.lat, start.lng], {
-      icon: L.divIcon({ className: "", html: "🚑", iconSize: [24, 24] }),
-    }).addTo(map);
-  }
-}
-
-function onToggleSim(e) {
-  state.running = e.target.checked;
-  if (els.simStatus) els.simStatus.textContent = state.running ? "Running" : "Paused";
-  if (state.running) {
-    if (!state.route) { alert("Start a session first."); e.target.checked = false; state.running = false; return; }
-    state.timer = setInterval(advanceStep, 2200);
+function detectLiveLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        currentCoords = [pos.coords.latitude, pos.coords.longitude];
+        ambulanceMarker.setLatLng(currentCoords);
+        map.setView(currentCoords, 14);
+        document.getElementById("lbl-gps-status").innerText = `${currentCoords[0].toFixed(4)}, ${currentCoords[1].toFixed(4)} (Live GPS)`;
+      },
+      (err) => {
+        console.warn("GPS unavailable or denied. Defaulting to Central Indore.", err);
+        currentCoords = [...INDORE_FALLBACK];
+        document.getElementById("lbl-gps-status").innerText = "22.7196, 75.8577 (Central Indore)";
+      },
+      { timeout: 7000 }
+    );
   } else {
-    clearInterval(state.timer);
+    document.getElementById("lbl-gps-status").innerText = "22.7196, 75.8577 (Central Indore)";
   }
 }
 
-async function advanceStep() {
-  if (!state.route || state.paused) return;
-  const path = state.route.polyline;
-  if (state.stepIndex >= path.length - 1) {
-    clearInterval(state.timer);
-    state.running = false;
-    if (els.simToggle) els.simToggle.checked = false;
-    if (els.simStatus) els.simStatus.textContent = "Arrived";
-
-    // Post arrival notification to backend
-    await Api.post("/api/trips/arrive", {
-      vehicle_id: state.vehicleId,
-      trip_id: state.tripId,
-      hospital_id: state.destinationId
-    }).catch(() => {});
-
-    logEvent("Ambulance arrived at destination.");
-    return;
-  }
-  state.stepIndex += 1;
-  const node = path[state.stepIndex];
-  ambulanceMarker.setLatLng([node.lat, node.lng]);
-  await Api.post("/api/telemetry/position", { vehicle_id: state.vehicleId, node: node.node }).catch(() => {});
-  updateProgress();
-}
-
-function updateProgress() {
-  if (!state.route) return;
-  const total = state.route.polyline.length - 1;
-  const pct = total === 0 ? 100 : Math.round((state.stepIndex / total) * 100);
-  if (els.progressFill) els.progressFill.style.width = pct + "%";
-  if (els.progressText) els.progressText.textContent = `${pct}% of route`;
-  const node = state.route.polyline[state.stepIndex];
-  if (els.currentNodeLabel && node) {
-    const label = (graph.nodes[node.node] && (graph.nodes[node.node].label || graph.nodes[node.node].name)) || node.node;
-    els.currentNodeLabel.textContent = label;
-  }
-}
-
-function connectDriverSocket(vehicleId) {
-  connectSocket(`/ws/driver/${vehicleId}`, (msg) => {
-    if (msg.type === "REROUTE_ALERT") {
-      showDiversionModal(msg);
-    }
-    if (msg.type === "DIVERSION_CONFIRMED") {
-      state.destinationId = msg.hospital_id;
-      if (els.currentNodeLabel) els.currentNodeLabel.textContent = `Diverted -> ${msg.hospital_name}`;
-      if (els.etaLabel) els.etaLabel.textContent = msg.eta_minutes.toFixed(1);
-      drawRoute(msg.polyline, true); // true = dashed red line
-      logEvent(`Navigation updated: Diverted -> ${msg.hospital_name}.`, true);
-    }
-    if (msg.type === "AMBULANCE_ARRIVED") {
-      alert(`🏁 ARRIVAL NOTIFICATION:\n${msg.message}`);
-      logEvent(msg.message, true);
-    }
-  }, () => logEvent("Live link to dispatch established."),
-     () => logEvent("Live link lost -- retrying..."));
-}
-
-function showDiversionModal(msg) {
-  state.paused = true;
-  if (els.rerouteBanner) els.rerouteBanner.style.display = "flex";
-  if (els.modalMessage) els.modalMessage.textContent = msg.message;
-  if (els.modalEta) els.modalEta.textContent = msg.eta_minutes.toFixed(1);
-  if (els.modalBackdrop) els.modalBackdrop.classList.add("show");
-  state.pendingProposal = msg;
-  playAlertTone();
-  logEvent(`REROUTE ALERT -- ${msg.message}`, true);
-}
-
-function playAlertTone() {
+async function loadHospitals() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "square"; osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(); osc.stop(ctx.currentTime + 0.18);
-  } catch (e) {}
+    const res = await fetch("/api/hospitals");
+    hospitalsList = await res.json();
+    const select = document.getElementById("dest-select");
+    select.innerHTML = "";
+
+    hospitalsList.forEach((h, index) => {
+      const opt = document.createElement("option");
+      opt.value = h.hospitalId;
+      opt.innerText = h.name;
+      select.appendChild(opt);
+      if (index === 0) currentHospital = h;
+    });
+
+    select.addEventListener("change", (e) => {
+      currentHospital = hospitalsList.find((h) => h.hospitalId === e.target.value);
+      document.getElementById("lbl-target-facility").innerText = currentHospital.name;
+    });
+  } catch (e) {
+    console.error("Failed to load hospitals", e);
+  }
 }
 
-async function onConfirmDiversion() {
-  closeModal();
-  const trip = await Api.post(`/api/trips/${state.tripId}/confirm_reroute`);
-  state.route = trip.route;
-  state.stepIndex = 0;
-  state.paused = false;
-  if (els.etaLabel) els.etaLabel.textContent = trip.route.eta_minutes.toFixed(1);
-  drawRoute(trip.route.polyline, true);
-  logEvent(`Diversion CONFIRMED -> navigating to new fallback hospital.`, true);
+async function fetchOsrmCurvedRoute(startLatLng, destLatLng) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${startLatLng[1]},${startLatLng[0]};${destLatLng[1]},${destLatLng[0]}?overview=full&geometries=geojson`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.routes && data.routes.length > 0) {
+      return data.routes[0].geometry.coordinates.map((coord) => [coord[1], coord[0]]);
+    }
+  } catch (err) {
+    console.warn("OSRM lookup failed, using linear interpolation.", err);
+  }
+  return [startLatLng, destLatLng];
 }
 
-async function onOverrideDiversion() {
-  const reason = (els.overrideReason && els.overrideReason.value.trim()) || "Driver override -- staying on primary route";
-  closeModal();
-  await Api.post(`/api/trips/${state.tripId}/override_reroute`, { reason });
-  state.paused = false;
-  if (els.overrideReason) els.overrideReason.value = "";
-  logEvent(`Diversion OVERRIDDEN -- reason logged: "${reason}". Continuing on primary route.`);
+async function startNavigation() {
+  if (!currentHospital) return;
+  isNavigating = true;
+  currentIndex = 0;
+
+  document.getElementById("btn-start-nav").disabled = true;
+  document.getElementById("btn-stop-nav").disabled = false;
+  document.getElementById("nav-status-badge").innerText = "ACTIVE GUIDANCE";
+  document.getElementById("nav-status-badge").className = "badge badge-active";
+  document.getElementById("arrival-card").classList.add("hidden");
+
+  const destCoords = [currentHospital.locationLat, currentHospital.locationLong];
+
+  if (destinationMarker) map.removeLayer(destinationMarker);
+  destinationMarker = L.marker(destCoords).addTo(map).bindPopup(currentHospital.name).openPopup();
+
+  activeRoutePoints = await fetchOsrmCurvedRoute(currentCoords, destCoords);
+
+  if (routePolyline) map.removeLayer(routePolyline);
+  routePolyline = L.polyline(activeRoutePoints, { color: "#2563eb", weight: 6, opacity: 0.8 }).addTo(map);
+  map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+
+  runRouteProgression();
 }
 
-function closeModal() {
-  if (els.modalBackdrop) els.modalBackdrop.classList.remove("show");
-  if (els.rerouteBanner) els.rerouteBanner.style.display = "none";
-  state.pendingProposal = null;
+function runRouteProgression() {
+  if (navInterval) clearInterval(navInterval);
+
+  navInterval = setInterval(() => {
+    if (!isNavigating || currentIndex >= activeRoutePoints.length) {
+      if (currentIndex >= activeRoutePoints.length && isNavigating) {
+        completeArrival();
+      }
+      return;
+    }
+
+    currentCoords = activeRoutePoints[currentIndex];
+    ambulanceMarker.setLatLng(currentCoords);
+
+    const remainingSteps = activeRoutePoints.length - currentIndex;
+    const estRemainingMins = Math.max(1, Math.ceil(remainingSteps * 0.4));
+    document.getElementById("eta-display").innerText = `ETA: ${estRemainingMins} mins`;
+    document.getElementById("lbl-distance-remaining").innerText = `${(remainingSteps * 0.15).toFixed(1)} km`;
+
+    fetch("/api/ambulance/location", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lat: currentCoords[0],
+        lng: currentCoords[1],
+        etaMinutes: `${estRemainingMins} mins`,
+      }),
+    });
+
+    currentIndex++;
+  }, 1000);
 }
 
-function logEvent(text, alert = false) {
-  if (!els.log) return;
-  const div = document.createElement("div");
-  div.className = "log-item" + (alert ? " alert" : "");
-  div.innerHTML = `<span class="t">${nowLabel()}</span> &nbsp; ${text}`;
-  els.log.prepend(div);
+function stopNavigation() {
+  isNavigating = false;
+  if (navInterval) clearInterval(navInterval);
+  document.getElementById("btn-start-nav").disabled = false;
+  document.getElementById("btn-stop-nav").disabled = true;
+  document.getElementById("nav-status-badge").innerText = "HALTED";
+}
+
+async function completeArrival() {
+  isNavigating = false;
+  clearInterval(navInterval);
+  document.getElementById("btn-start-nav").disabled = false;
+  document.getElementById("btn-stop-nav").disabled = true;
+  document.getElementById("nav-status-badge").innerText = "ARRIVED AT ER";
+  document.getElementById("nav-status-badge").className = "badge badge-success";
+  document.getElementById("eta-display").innerText = "ETA: 0 mins";
+
+  await fetch("/api/ambulance/arrival", { method: "POST" });
+}
+
+function playVoiceAlert(text) {
+  if ("speechSynthesis" in window) {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.0;
+    window.speechSynthesis.speak(utter);
+  }
+}
+
+function setupSocketListeners() {
+  // 1-Tap Audio-Visual Reroute prompt triggered by Risk Engine (US-15, US-16)
+  socket.on("reroute_prompt", (data) => {
+    document.getElementById("modal-hospital-name").innerText = data.hospitalName;
+    document.getElementById("modal-icu-beds").innerText = data.icuBeds;
+    document.getElementById("reroute-reason").innerText = data.reason;
+    document.getElementById("reroute-modal").classList.remove("hidden");
+
+    playVoiceAlert(`Attention driver. Red Alert triggered. Immediate reroute recommended to ${data.hospitalName}`);
+  });
+
+  socket.on("reroute_confirmed", async (data) => {
+    document.getElementById("reroute-modal").classList.add("hidden");
+    document.getElementById("lbl-target-facility").innerText = data.hospitalName;
+    document.getElementById("dest-select").value = data.hospitalId;
+
+    if (destinationMarker) map.removeLayer(destinationMarker);
+    destinationMarker = L.marker(data.destCoords).addTo(map).bindPopup(data.hospitalName).openPopup();
+
+    // Redraw polyline along curved roads to newly assigned facility
+    activeRoutePoints = await fetchOsrmCurvedRoute(currentCoords, data.destCoords);
+    currentIndex = 0;
+
+    if (routePolyline) map.removeLayer(routePolyline);
+    routePolyline = L.polyline(activeRoutePoints, { color: "#dc2626", weight: 6, opacity: 0.9 }).addTo(map);
+    map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+
+    document.getElementById("nav-status-badge").innerText = "REROUTED GUIDANCE";
+    document.getElementById("nav-status-badge").className = "badge badge-critical";
+  });
+
+  socket.on("arrival_event", (data) => {
+    const arrivalCard = document.getElementById("arrival-card");
+    document.getElementById("arrival-msg").innerText = data.message;
+    arrivalCard.classList.remove("hidden");
+    playVoiceAlert("Ambulance arrived at Emergency Room. Initiating patient handover.");
+  });
+}
+
+async function respondReroute(accepted) {
+  document.getElementById("reroute-modal").classList.add("hidden");
+  await fetch("/api/driver/respond-reroute", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accepted }),
+  });
 }

@@ -1,146 +1,85 @@
+<!-- ============================================================================== -->
+<!-- FILE: frontend/driver.html                                                     -->
+<!-- ============================================================================== -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RET-RP &middot; Driver Console</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="css/style.css" />
+  <meta charset="UTF-8">
+  <title>Ambulance Driver Console - Emergency Navigation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.socketio.io/4.7.2/socketio.min.js"></script>
 </head>
-<body>
+<body class="driver-body">
+  <header class="app-header">
+    <div class="header-left">
+      <span class="badge badge-driver">DRIVER CONSOLE</span>
+      <h2 id="header-vehicle-id">Ambulance: MP-09-AV-2026</h2>
+    </div>
+    <div class="header-right">
+      <span id="nav-status-badge" class="badge badge-active">IDLE</span>
+      <span id="eta-display" class="eta-box">ETA: -- mins</span>
+    </div>
+  </header>
 
-<div class="topbar">
-  <div class="brand">
-    <span class="mark">Emergency Patient Routing System : </span>
-    <span class="portal-name">Driver Console</span>
-  </div>
-  <div class="status-chip"><span class="dot live"></span> Ambulance Telematics</div>
-</div>
+  <main class="console-layout">
+    <!-- Controls Sidebar -->
+    <section class="side-panel">
+      <div class="card">
+        <h3>Destination Hospital</h3>
+        <label for="dest-select">Primary ER Facility:</label>
+        <select id="dest-select" class="form-select"></select>
+        
+        <div class="button-group mt-2">
+          <button id="btn-start-nav" class="btn btn-primary">Start Navigation</button>
+          <button id="btn-stop-nav" class="btn btn-outline" disabled>Halt Route</button>
+        </div>
+      </div>
 
-<div class="layout">
-  <div class="col">
-    <div class="panel">
-      <div class="panel-head"><h2>Live Navigation</h2></div>
+      <div class="card">
+        <h3>Live Navigation Details</h3>
+        <p><strong>Target:</strong> <span id="lbl-target-facility">MY Hospital (Maharaja Yeshwantrao)</span></p>
+        <p><strong>GPS Location:</strong> <span id="lbl-gps-status">Detecting GPS...</span></p>
+        <p><strong>Remaining Dist:</strong> <span id="lbl-distance-remaining">-- km</span></p>
+        <p><strong>Traffic Speed:</strong> <span id="lbl-traffic-speed">38 km/h (Moderate)</span></p>
+      </div>
+
+      <div id="arrival-card" class="card arrival-banner hidden">
+        <h3 style="color:#22c55e;">Patient Handover Initiated</h3>
+        <p id="arrival-msg">Ambulance has arrived at ER.</p>
+      </div>
+    </section>
+
+    <!-- Map Viewport -->
+    <section class="map-container">
       <div id="map"></div>
-      <div style="margin-top:14px;">
-        <div class="row" style="align-items:center;">
-          <div>
-            <div class="small-muted">Current position</div>
-            <div id="currentNodeLabel" style="font-weight:600;">--</div>
-          </div>
-          <div style="text-align:right;">
-            <div class="small-muted">ETA</div>
-            <div style="font-family:var(--font-mono); font-size:20px; color:var(--teal);"><span id="etaLabel">--</span> min</div>
-          </div>
-        </div>
-        <div style="background:var(--navy-900); border-radius:100px; height:8px; margin-top:12px; overflow:hidden;">
-          <div id="progressFill" style="background:var(--teal); height:100%; width:0%; transition:width 0.3s;"></div>
-        </div>
-        <div id="progressText" class="small-muted" style="margin-top:6px;">Not started</div>
-      </div>
-    </div>
+    </section>
+  </main>
 
-    <div class="panel">
-      <div class="panel-head"><h2>Route Simulation</h2></div>
-      <div class="switch-row">
-        <div>
-          <div style="font-weight:600; font-size:14px;">Live route traversal</div>
-          <div class="small-muted" id="simStatus">Paused</div>
+  <!-- High-Priority 1-Tap Audio-Visual Reroute Modal (Report US-15, US-16) -->
+  <div id="reroute-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header critical">
+        <span class="blink-dot"></span>
+        <h2>CRITICAL RED ALERT: REROUTE PROPOSED</h2>
+      </div>
+      <div class="modal-body">
+        <p class="modal-alert-desc" id="reroute-reason">Patient condition critical. Immediate diversion required.</p>
+        <div class="reroute-details-box">
+          <p><strong>New Destination:</strong> <span id="modal-hospital-name">Bombay Hospital Indore</span></p>
+          <p><strong>Available ICU Beds:</strong> <span id="modal-icu-beds">6</span></p>
+          <p><strong>Specialized Equipment:</strong> <span>Ventilator & Cath Lab Active</span></p>
         </div>
-        <label class="switch">
-          <input type="checkbox" id="simToggle" />
-          <span class="slider"></span>
-        </label>
       </div>
-      <div class="field">
-        <label>Simulated speed</label>
-        <input type="range" id="speedSlider" min="20" max="100" value="45" />
-        <div class="small-muted" id="speedVal">45 km/h</div>
-      </div>
-      <div id="rerouteBanner" style="display:none; align-items:center; gap:8px; background:var(--red-dim); color:var(--red-bright); padding:10px 14px; border-radius:8px; font-size:13px; font-weight:600;">
-        ⚠ Reroute prompt pending -- respond in the pop-up
+      <div class="modal-actions">
+        <button id="btn-accept-reroute" class="btn btn-critical-lg">1-Tap Accept Reroute</button>
+        <button id="btn-decline-reroute" class="btn btn-secondary">Maintain Route</button>
       </div>
     </div>
   </div>
 
-  <div class="col">
-    <div class="panel">
-      <div class="panel-head"><h2>Vehicle &amp; Dispatch</h2></div>
-      <div class="field">
-        <label>Vehicle ID</label>
-        <input type="text" id="vehicleId" placeholder="AMB-07" />
-      </div>
-      <div class="row">
-        <div class="field">
-          <label>Fleet type</label>
-          <select id="fleetType"><option>Public</option><option>Private</option></select>
-        </div>
-        <div class="field">
-          <label>Capability tier</label>
-          <select id="capabilityTier"><option>BLS</option><option selected>ALS</option><option>MICU</option></select>
-        </div>
-      </div>
-      <div class="field">
-        <label>Driver name</label>
-        <input type="text" id="driverName" placeholder="Optional" />
-      </div>
-      <button type="button" class="primary block" onclick="event.preventDefault(); onRegister(event)">Register Vehicle</button>
-
-      <hr style="border-color:var(--navy-700); margin:18px 0;" />
-
-      <div class="field">
-        <label>Primary destination hospital</label>
-        <select id="destHospital"></select>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label>Patient name</label>
-          <input type="text" id="patientName" placeholder="Jane Doe" />
-        </div>
-        <div class="field">
-          <label>Age</label>
-          <input type="number" id="patientAge" placeholder="54" />
-        </div>
-      </div>
-      <div class="field">
-        <label>Chief complaint</label>
-        <input type="text" id="chiefComplaint" placeholder="e.g. chest pain / respiratory distress" />
-        <div class="small-muted" style="margin-top:4px;">Used to infer required ER equipment (cath lab / ventilator) for reroute matching.</div>
-      </div>
-      <button type="button" class="block" id="startSessionBtn" disabled>Start Patient Transport Trip</button>
-
-      <div id="sessionInfo" style="display:none; margin-top:14px;">
-        <div class="small-muted">Active Trip ID (share with Paramedic console)</div>
-        <div id="sessionIdOut" style="font-family:var(--font-mono); font-size:16px; color:var(--teal); font-weight:700;"></div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-head"><h2>Dispatch Log</h2></div>
-      <div class="log-list" id="log"></div>
-    </div>
-  </div>
-</div>
-
-<div class="modal-backdrop" id="modalBackdrop">
-  <div class="modal">
-    <span class="siren">⚠ CRITICAL &middot; EMERGENCY DIVERSION PROPOSED</span>
-    <h3 id="modalMessage">Emergency Diversion Proposed</h3>
-    <p>New ETA: <b id="modalEta">--</b> min &middot; Patient vitals breached safety threshold</p>
-    <div class="field" style="text-align:left;">
-      <label>Override reason (required to stay on route)</label>
-      <input type="text" id="overrideReason" placeholder="e.g. patient stabilizing, family declines" />
-    </div>
-    <div class="modal-actions">
-      <button class="danger block" id="acceptBtn">Confirm Diversion</button>
-      <button class="block" id="overrideBtn">Override &middot; Stay on Route</button>
-    </div>
-  </div>
-</div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>window.RET_RP_API_BASE = "http://localhost:8000";</script>
-<script src="js/api.js"></script>
-<script src="js/driver.js"></script>
+  <script src="js/driver.js"></script>
 </body>
 </html>

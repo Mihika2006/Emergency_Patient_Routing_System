@@ -1,518 +1,284 @@
+# ==============================================================================
+# FILE: backend/models.py
+# ==============================================================================
 """
-models.py
----------
-Formal object-oriented domain layer, introduced to close the audit gap
-between the Exp 9 class diagram / Exp 4 detailed design (which specify
-classes and methods) and the first prototype, which only used raw dict
-lookups and ad-hoc SQLite queries directly inside app.py.
-
-Each class below corresponds 1:1 to a class on the Exp 9 class diagram
-(see docs/AUDIT_AND_ARCHITECTURE.md for the verification table). Classes
-wrap their own persistence calls into db.py so that app.py only ever
-talks to objects, never to sqlite3 directly.
-
-Also introduces `Trip`, the explicit state machine requested in Part 1.2
-/ 1.3 of the refactor brief: it is the object that remembers whether a
-reroute proposal is pending driver confirmation, and debounces repeated
-threshold breaches so fluctuating vitals cannot spam reroute proposals
-(Edge Case 3).
+Domain models strictly matching Section 5 (Class Diagram) of the SE Project Report.
+Contains exactly the 10 domain classes defined in the report.
 """
-
-from __future__ import annotations
-
-import time
-import uuid
-from typing import Dict, List, Optional
-
-import db
-import routing
-from graph_data import NODES, HOSPITAL_NODES
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import math
 
 
-# ---------------------------------------------------------------------
-# VitalTelemetry  (Exp 9 class diagram: "Patient Vitals")
-# ---------------------------------------------------------------------
-class VitalTelemetry:
-    """One reading of a patient's vitals + the deterministic risk rule.
-
-    Thresholds match Exp 4 (detailed design), Exp 5 (reference code),
-    Exp 6 (user stories) and the Exp 10 / Exp 8 diagrams: SpO2 < 90 or
-    HR > 120 -> Red. (The audit flagged the SRS's own UC-01 example,
-    which instead says SpO2 < 85 -- that figure is the outlier and is
-    NOT used here; see finding #2 in the audit report.)
-    """
-
-    SPO2_CRITICAL = 90
-    SPO2_WARNING = 94
-    HR_CRITICAL = 120
-    HR_WARNING = 100
-
-    def __init__(self, hr: float, spo2: float, systolic_bp: float, diastolic_bp: float,
-                 resp_rate: float = 16, timestamp: float = None):
-        self.hr = hr
-        self.spo2 = spo2
-        self.systolic_bp = systolic_bp
-        self.diastolic_bp = diastolic_bp
-        self.resp_rate = resp_rate
-        self.timestamp = timestamp or time.time()
-        self.risk_level: Optional[str] = None
-
-    def evaluate_thresholds(self) -> str:
-        """Rule-based evaluation -- deterministic, no ML model (per audit Part 1 Q2)."""
-        if self.spo2 < self.SPO2_CRITICAL or self.hr > self.HR_CRITICAL:
-            self.risk_level = "Red"
-        elif self.spo2 < self.SPO2_WARNING or self.hr > self.HR_WARNING:
-            self.risk_level = "Yellow"
-        else:
-            self.risk_level = "Green"
-        return self.risk_level
+class Person:
+    """Base class for project actors (Report Fig. 5)."""
+    def __init__(self, personId: str, name: str, phone: str):
+        self.personId: str = personId
+        self.name: str = name
+        self.phone: str = phone
 
     def to_dict(self) -> dict:
-        return {
-            "heart_rate": self.hr,
-            "spo2": self.spo2,
-            "systolic_bp": self.systolic_bp,
-            "diastolic_bp": self.diastolic_bp,
-            "respiratory_rate": self.resp_rate,
-            "timestamp": self.timestamp,
-            "risk_level": self.risk_level,
-        }
+        return {"personId": self.personId, "name": self.name, "phone": self.phone}
 
 
-# ---------------------------------------------------------------------
-# Patient  (Exp 9 class diagram: "Patient Vitals" extended with identity)
-# ---------------------------------------------------------------------
-class Patient:
-    """Required-equipment inference is a small deterministic keyword rule
-    (not ML) standing in for a real intake form, so RouteEngine has
-    something concrete to filter fallback hospitals against (Edge Case 1).
-    """
+class Paramedic(Person):
+    """Paramedic operator (Report Fig. 5)."""
+    def __init__(self, personId: str, name: str, phone: str, badgeNumber: str, certificationLevel: str):
+        super().__init__(personId, name, phone)
+        self.badgeNumber: str = badgeNumber
+        self.certificationLevel: str = certificationLevel
 
-    EQUIPMENT_KEYWORDS = {
-        "cath_lab": ["chest pain", "cardiac", "heart attack", "mi", "stemi"],
-        "ventilator": ["respiratory", "breathing", "copd", "asthma", "resp failure", "unconscious"],
-    }
+    def connectSensor(self, sensor: "BLESensor") -> bool:
+        return sensor.scanDevices() and sensor.connectionStatus == "Connected"
 
-    def __init__(self, patient_id: str = None, name: str = "Unknown", age: int = None,
-                 gender: str = None, chief_complaint: str = "", triage_level: str = "Stable",
-                 required_equipment: List[str] = None):
-        self.patient_id = patient_id or str(uuid.uuid4())[:8]
-        self.name = name
-        self.age = age
-        self.gender = gender
-        self.chief_complaint = chief_complaint or ""
-        self.triage_level = triage_level
-        self.required_equipment = (
-            required_equipment if required_equipment is not None else self._derive_equipment()
+    def enterManualVitals(self, heartRate: int, spO2: int, systolicBP: int) -> "PatientVitals":
+        vitals = PatientVitals(
+            recordId=f"MANUAL-{int(datetime.utcnow().timestamp())}",
+            heartRate=heartRate,
+            spO2=spO2,
+            systolicBP=systolicBP,
+            timestamp=datetime.utcnow().isoformat(),
         )
+        vitals.normalizeData()
+        vitals.evaluateThresholds()
+        return vitals
 
-    def _derive_equipment(self) -> List[str]:
-        text = self.chief_complaint.lower()
-        return [equip for equip, kws in self.EQUIPMENT_KEYWORDS.items() if any(k in text for k in kws)]
-
-    def update_triage(self, risk_level: str):
-        self.triage_level = {"Red": "Critical", "Yellow": "Urgent", "Green": "Stable"}.get(risk_level, self.triage_level)
-        return self.triage_level
-
-    def to_dict(self) -> dict:
-        return {
-            "patient_id": self.patient_id, "name": self.name, "age": self.age, "gender": self.gender,
-            "chief_complaint": self.chief_complaint, "triage_level": self.triage_level,
-            "required_equipment": self.required_equipment,
-        }
+    def triggerManualReroute(self, reason: str = "Clinical Deterioration") -> dict:
+        return {"manualOverride": True, "reason": reason, "timestamp": datetime.utcnow().isoformat()}
 
 
-# ---------------------------------------------------------------------
-# Hospital  (Exp 9 class diagram: "Hospital")
-# ---------------------------------------------------------------------
-class Hospital:
-    def __init__(self, hospital_id: str, name: str, node: str, trauma_level: str,
-                 icu_beds: int, ventilator_available: bool, cath_lab_available: bool,
-                 status: str = "Ready"):
-        self.hospital_id = hospital_id
-        self.name = name
-        self.node = node
-        self.trauma_level = trauma_level
-        self.icu_beds = icu_beds
-        self.ventilator_available = ventilator_available
-        self.cath_lab_available = cath_lab_available
-        self.status = status
+class Driver(Person):
+    """Ambulance driver (Report Fig. 5)."""
+    def __init__(self, personId: str, name: str, phone: str, driverLicenseId: str, shiftStatus: str = "On Duty"):
+        super().__init__(personId, name, phone)
+        self.driverLicenseId: str = driverLicenseId
+        self.shiftStatus: str = shiftStatus
 
-    def check_availability(self, required_equipment: List[str] = None) -> bool:
-        """Edge Case 1: a hospital is eligible only if it is Ready, has an open
-        ICU bed, AND has every piece of equipment the patient needs."""
-        if self.status != "Ready" or self.icu_beds <= 0:
-            return False
-        for equip in (required_equipment or []):
-            if equip == "cath_lab" and not self.cath_lab_available:
-                return False
-            if equip == "ventilator" and not self.ventilator_available:
-                return False
-        return True
+    def acceptReroute(self, routeId: str) -> dict:
+        return {"action": "ACCEPTED", "routeId": routeId, "timestamp": datetime.utcnow().isoformat()}
 
-    def reserve_bay(self) -> bool:
-        """FR-005-adjacent: claim one ICU bed for an inbound diversion."""
-        if self.icu_beds <= 0:
-            return False
-        self.icu_beds -= 1
-        db.sync_hospital(self.hospital_id, icu_beds_available=self.icu_beds)
-        return True
-
-    def update_status(self, **fields):
-        for k, v in fields.items():
-            if hasattr(self, k):
-                setattr(self, k, v)
-        db.sync_hospital(
-            self.hospital_id,
-            icu_beds_available=self.icu_beds,
-            cath_lab_available=self.cath_lab_available,
-            ventilator_available=self.ventilator_available,
-            current_status=self.status,
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            "hospital_id": self.hospital_id, "name": self.name, "node": self.node,
-            "trauma_level": self.trauma_level, "icu_beds_available": self.icu_beds,
-            "ventilator_available": self.ventilator_available, "cath_lab_available": self.cath_lab_available,
-            "current_status": self.status,
-        }
-
-    @classmethod
-    def seed_all(cls) -> Dict[str, "Hospital"]:
-        from graph_data import HOSPITALS
-        return {
-            hid: cls(hid, h["name"], hid, h["trauma_level"], h["icu_beds_available"],
-                     h["ventilator_available"], h["cath_lab_available"], h["status"])
-            for hid, h in HOSPITALS.items()
-        }
+    def declineReroute(self, routeId: str) -> dict:
+        return {"action": "DECLINED", "routeId": routeId, "timestamp": datetime.utcnow().isoformat()}
 
 
-# ---------------------------------------------------------------------
-# Ambulance / Vehicle  (Exp 9 class diagram: "Ambulance")
-# ---------------------------------------------------------------------
+class HospitalStaff(Person):
+    """Emergency room staff (Report Fig. 5)."""
+    def __init__(self, personId: str, name: str, phone: str, staffId: str, department: str = "Emergency"):
+        super().__init__(personId, name, phone)
+        self.staffId: str = staffId
+        self.department: str = department
+
+    def viewDashboard(self, hospitalId: str, telemetryData: dict) -> dict:
+        return {"hospitalId": hospitalId, "telemetry": telemetryData, "viewedAt": datetime.utcnow().isoformat()}
+
+    def acknowledgeAlert(self, alertId: str) -> dict:
+        return {"alertId": alertId, "acknowledged": True, "timestamp": datetime.utcnow().isoformat()}
+
+
 class Ambulance:
-    def __init__(self, vehicle_id: str, plate_number: str = None, capability_tier: str = "ALS",
-                 driver_name: str = None, fleet_type: str = "Public",
-                 status: str = "Available", current_location: str = "A", speed: float = 0):
-        self.vehicle_id = vehicle_id
-        self.plate_number = plate_number or vehicle_id
-        self.capability_tier = capability_tier
-        self.driver_name = driver_name
-        self.fleet_type = fleet_type
-        self.status = status
-        self.current_location = current_location
-        self.speed = speed
-        self.trip_id: Optional[str] = None
+    """Ambulance vehicle entity (Report Fig. 5)."""
+    def __init__(
+        self,
+        vehicleId: str,
+        licensePlate: str,
+        currentLat: float,
+        currentLong: float,
+        status: str = "Stationary",
+    ):
+        self.vehicleId: str = vehicleId
+        self.licensePlate: str = licensePlate
+        self.currentLat: float = float(currentLat)
+        self.currentLong: float = float(currentLong)
+        self.status: str = status  # Stationary -> Transporting Patient -> Reroute Path -> Arrival at ER
 
-    def update_location(self, node: str):
-        self.current_location = node
-        loc = NODES.get(node, {})
-        db.update_vehicle_position(self.vehicle_id, loc.get("lat"), loc.get("lng"), node)
+    def updateLocation(self, lat: float, lng: float) -> None:
+        self.currentLat = float(lat)
+        self.currentLong = float(lng)
 
-    def set_speed(self, speed: float):
-        self.speed = speed
+    def getCurrentCoords(self) -> Tuple[float, float]:
+        return (self.currentLat, self.currentLong)
 
-    def get_status(self) -> str:
-        return self.status
-
-    def set_status(self, status: str) -> None:
-        self.status = status
-        loc = self.current_location if self.current_location in NODES else "A"
-        db.update_vehicle_position(self.vehicle_id, NODES[loc]["lat"],
-                                   NODES[loc]["lng"], loc, status)
-        
     def to_dict(self) -> dict:
         return {
-            "vehicle_id": self.vehicle_id, "plate_number": self.plate_number,
-            "capability_tier": self.capability_tier, "driver_name": self.driver_name,
-            "fleet_type": self.fleet_type, "status": self.status,
-            "current_location": self.current_location, "speed": self.speed,
-            "trip_id": self.trip_id,
+            "vehicleId": self.vehicleId,
+            "licensePlate": self.licensePlate,
+            "currentLat": self.currentLat,
+            "currentLong": self.currentLong,
+            "status": self.status,
         }
 
 
-# ---------------------------------------------------------------------
-# RouteEngine / PathFinder  (Exp 9 class diagram: "Route Engine")
-# ---------------------------------------------------------------------
-class RouteEngine:
-    """Thin OOP wrapper around the Dijkstra implementation in routing.py,
-    plus the two higher-level behaviours the class diagram names:
-    find_fallback_hospital() and compute_safety_corridor().
-    """
+class BLESensor:
+    """BLE Patient Sensor (Report Fig. 5 & Fig. 6)."""
+    def __init__(
+        self,
+        deviceId: str,
+        deviceType: str = "PulseOximeter_BP",
+        batteryLevel: str = "98%",
+        connectionStatus: str = "Disconnected",
+    ):
+        self.deviceId: str = deviceId
+        self.deviceType: str = deviceType
+        self.batteryLevel: str = batteryLevel
+        self.connectionStatus: str = connectionStatus  # Disconnected -> Scanning -> Connecting -> Streaming
 
-    def __init__(self):
-        self.graph = routing.ADJACENCY if hasattr(routing, "ADJACENCY") else None
-        self.active_corridor: List[str] = []
-
-    def calculate_optimal_path(self, start: str, destination: str) -> Optional[dict]:
-        return routing.compute_shortest_time_path(start, destination)
-
-    def find_fallback_hospital(self, current_node: str, hospitals: Dict[str, Hospital],
-                                required_equipment: List[str] = None,
-                                exclude: List[str] = None) -> List[dict]:
-        exclude = set(exclude or [])
-        eligible = {
-            hid: h for hid, h in hospitals.items()
-            if hid not in exclude and h.check_availability(required_equipment)
-        }
-        ranked = []
-        for hid, hospital in eligible.items():
-            # Translate hospital ID to its graph node
-            target_node = HOSPITAL_NODES.get(hid, hospital.node)
-            start = current_node if current_node in NODES else "A"
-            route = self.calculate_optimal_path(start, target_node)
-            if route:
-                ranked.append({
-                    "hospital_id": hid,
-                    "hospital": hospital,
-                    "eta_minutes": route["eta_minutes"],
-                    "route": route,
-                })
-        ranked.sort(key=lambda r: r["eta_minutes"])
-        return ranked
-
-    def compute_safety_corridor(self, path: List[dict], hospitals: Dict[str, Hospital],
-                                 max_hops: int = 2) -> List[str]:
-        """FR-004's 'dynamic safety corridor': rather than only computing a
-        fallback reactively after a Red alert, maintain a running list of
-        hospitals within `max_hops` road segments of ANY point on the
-        primary path, refreshed whenever the route is (re)calculated. This
-        directly closes audit finding #6 (safety corridor previously
-        unimplemented).
-        """
-        corridor = set()
-        nodes_on_path = [step["node"] if isinstance(step, dict) else step for step in path]
-        for node in nodes_on_path:
-            for hid in HOSPITAL_NODES:
-                route = self.calculate_optimal_path(node, hid)
-                if route and (len(route["path"]) - 1) <= max_hops:
-                    corridor.add(hid)
-        self.active_corridor = sorted(corridor)
-        return self.active_corridor
-
-
-# ---------------------------------------------------------------------
-# AuditLog  (Exp 9 class diagram: "Audit Log" / FR-011)
-# ---------------------------------------------------------------------
-class AuditLog:
-    """Static convenience wrapper so callers log structured events instead
-    of hand-building dicts inline (Edge Case 2 requires an audit entry
-    with reason + timestamp on every override)."""
-
-    @staticmethod
-    def record(event_type: str, trip_id: str = None, vehicle_id: str = None, details: dict = None):
-        db.log_audit(event_type, session_id=trip_id, vehicle_id=vehicle_id, details=details or {})
-
-    @classmethod
-    def threshold_alert(cls, trip_id, vehicle_id, vitals: VitalTelemetry):
-        cls.record("THRESHOLD_ALERT", trip_id, vehicle_id, vitals.to_dict())
-
-    @classmethod
-    def reroute_proposed(cls, trip_id, vehicle_id, hospital_id, eta_minutes):
-        cls.record("REROUTE_PROPOSED", trip_id, vehicle_id, {"target_hospital_id": hospital_id, "eta_minutes": eta_minutes})
-
-    @classmethod
-    def reroute_confirmed(cls, trip_id, vehicle_id, hospital_id):
-        cls.record("DRIVER_CONFIRM_REROUTE", trip_id, vehicle_id, {"target_hospital_id": hospital_id})
-
-    @classmethod
-    def reroute_overridden(cls, trip_id, vehicle_id, reason: str):
-        cls.record("DRIVER_OVERRIDE_REROUTE", trip_id, vehicle_id, {"reason": reason, "timestamp": time.time()})
-
-    @classmethod
-    def reroute_debounced(cls, trip_id, vehicle_id, vitals: VitalTelemetry):
-        cls.record("REROUTE_DEBOUNCED", trip_id, vehicle_id,
-                    {"reason": "vitals fluctuating near threshold / proposal already pending", **vitals.to_dict()})
-
-    @classmethod
-    def no_hospital_available(cls, trip_id, vehicle_id):
-        cls.record("REROUTE_FAILED_NO_CAPACITY", trip_id, vehicle_id)
-
-
-# ---------------------------------------------------------------------
-# User roles  (Exp 9 class diagram: Person -> Driver / Paramedic / HospitalStaff)
-# ---------------------------------------------------------------------
-class User:
-    def __init__(self, user_id: str, name: str, role: str):
-        self.user_id = user_id
-        self.name = name
-        self.role = role
-
-
-class Driver(User):
-    def __init__(self, user_id: str, name: str, vehicle: Ambulance):
-        super().__init__(user_id, name, "Driver")
-        self.vehicle = vehicle
-
-    def accept_reroute(self, trip: "Trip") -> Optional[dict]:
-        """Exp 9: Driver.acceptReroute() -- confirms the pending proposal."""
-        confirmed = trip.confirm_reroute()
-        if confirmed:
-            AuditLog.reroute_confirmed(trip.trip_id, self.vehicle.vehicle_id, confirmed["hospital_id"])
-        return confirmed
-
-    def decline_reroute(self, trip: "Trip", reason: str = "Driver override") -> dict:
-        """Exp 9: Driver.declineReroute() -- Edge Case 2."""
-        result = trip.override_reroute(reason)
-        AuditLog.reroute_overridden(trip.trip_id, self.vehicle.vehicle_id, reason)
-        return result
-
-
-class Paramedic(User):
-    def __init__(self, user_id: str, name: str):
-        super().__init__(user_id, name, "Paramedic")
-
-    def enter_manual_vitals(self, trip: "Trip", vitals: VitalTelemetry) -> str:
-        """Exp 9: Paramedic.enterManualVitals()."""
-        return trip.ingest_vitals(vitals)
-
-    def trigger_manual_reroute(self, trip: "Trip", route_engine: RouteEngine,
-                                hospitals: Dict[str, Hospital]) -> Optional[dict]:
-        """Exp 9: Paramedic.triggerManualReroute() -- manual emergency override,
-        bypasses the usual Red-threshold gate but still respects the Trip
-        state machine (no duplicate proposals)."""
-        return trip.propose_reroute(route_engine, hospitals, force=True)
-
-
-class HospitalCoordinator(User):
-    def __init__(self, user_id: str, name: str, hospital: Hospital):
-        super().__init__(user_id, name, "HospitalCoordinator")
-        self.hospital = hospital
-
-    def acknowledge_alert(self, trip: "Trip"):
-        """Exp 9: HospitalStaff.acknowledgeAlert()."""
-        AuditLog.record("HOSPITAL_ACKNOWLEDGED", trip.trip_id, details={"hospital_id": self.hospital.hospital_id})
-
-    def view_dashboard(self) -> dict:
-        return self.hospital.to_dict()
-
-
-# ---------------------------------------------------------------------
-# Trip  (the Exp 10 sequence-diagram / Exp 8 activity-diagram state
-# machine: SRS "Patient Session" entity, extended with the explicit
-# ReroutePending state the refactor brief asks for)
-# ---------------------------------------------------------------------
-class Trip:
-    """
-    States: Green -> Yellow -> Red -> ReroutePending -> Diverted
-                                   \\-> Red (override, debounced) -/
-
-    - A Red vital reading only PROPOSES a reroute (propose_reroute);
-      it never changes `destination_hospital_id` by itself.
-    - `destination_hospital_id` / `route` change only inside
-      confirm_reroute(), which is only reachable via Driver.accept_reroute().
-    - Edge Case 3 (oscillating vitals): once a proposal is pending, or
-      once the trip has already diverted, or during the post-override
-      debounce window, propose_reroute() is a no-op (logged, not spammed).
-    """
-
-    DEBOUNCE_SECONDS = 25
-
-    def __init__(self, trip_id: str, vehicle: Ambulance, patient: Patient,
-                 destination_hospital_id: str, route: dict):
-        self.trip_id = trip_id
-        self.vehicle = vehicle
-        self.patient = patient
-        self.destination_hospital_id = destination_hospital_id
-        self.route = route
-        self.state = "Green"
-        self.diverted = False
-        self.pending_proposal: Optional[dict] = None
-        self.last_vitals: Optional[VitalTelemetry] = None
-        self.last_override_at: Optional[float] = None
-        self.start_time = time.time()
-        vehicle.trip_id = trip_id
-
-    # -- vitals -----------------------------------------------------
-    def ingest_vitals(self, vitals: VitalTelemetry) -> str:
-        vitals.evaluate_thresholds()
-        self.last_vitals = vitals
-        self.patient.update_triage(vitals.risk_level)
-        if self.pending_proposal is None and not self.diverted:
-            self.state = vitals.risk_level
-        db.insert_vital(self.trip_id, vitals.hr, vitals.spo2, vitals.systolic_bp,
-                         vitals.diastolic_bp, vitals.resp_rate, vitals.risk_level)
-        db.update_session_risk(self.trip_id, vitals.risk_level)
-        db.update_trip_state(self.trip_id, self.state, triage_level=self.patient.triage_level)
-        return vitals.risk_level
-
-    # -- reroute workflow (requirement 2 + edge cases 1 & 3) ----------
-    def can_propose_reroute(self) -> bool:
-        if self.pending_proposal is not None:
-            return False
-        if self.diverted:
-            return False
-        if self.last_override_at and (time.time() - self.last_override_at) < self.DEBOUNCE_SECONDS:
-            return False
+    def scanDevices(self) -> bool:
+        self.connectionStatus = "Scanning"
+        # Simulate discovery and transition
+        self.connectionStatus = "Connecting"
+        self.connectionStatus = "Streaming"
         return True
 
-    def propose_reroute(self, route_engine: RouteEngine, hospitals: Dict[str, Hospital], force: bool = False) -> Optional[dict]:
-        if not force and not self.can_propose_reroute():
-            if self.last_vitals:
-                AuditLog.reroute_debounced(self.trip_id, self.vehicle.vehicle_id, self.last_vitals)
-            return None
-        if force and self.pending_proposal is not None:
-            return None  # a decision is already awaited; don't overwrite it mid-flight
+    def readRawPacket(self, hexString: str) -> bytes:
+        return bytes.fromhex(hexString.replace(" ", ""))
 
-        ranked = route_engine.find_fallback_hospital(
-            self.vehicle.current_location, hospitals,
-            required_equipment=self.patient.required_equipment,
-            exclude=[self.destination_hospital_id],
-        )
-        if not ranked:
-            AuditLog.no_hospital_available(self.trip_id, self.vehicle.vehicle_id)
-            return None
+    def validateChecksum(self, packet: bytes) -> bool:
+        if len(packet) < 2:
+            return False
+        calc = sum(packet[:-1]) & 0xFF
+        return calc == packet[-1]
 
-        best = ranked[0]
-        self.pending_proposal = {
-            "hospital_id": best["hospital_id"],
-            "hospital_name": best["hospital"].name,
-            "route": best["route"],
-            "eta_minutes": best["eta_minutes"],
-            "proposed_at": time.time(),
-            "candidates": [{"hospital_id": r["hospital_id"], "eta_minutes": r["eta_minutes"]} for r in ranked],
-        }
-        self.state = "ReroutePending"
-        self.vehicle.set_status("Reroute-Pending")
-        db.update_trip_state(self.trip_id, self.state)
-        AuditLog.reroute_proposed(self.trip_id, self.vehicle.vehicle_id, best["hospital_id"], best["eta_minutes"])
-        return self.pending_proposal
 
-    def confirm_reroute(self) -> Optional[dict]:
-        if not self.pending_proposal:
-            return None
-        proposal = self.pending_proposal
-        self.destination_hospital_id = proposal["hospital_id"]
-        self.route = proposal["route"]
-        self.diverted = True
-        self.state = "Diverted"
-        self.pending_proposal = None
-        self.vehicle.set_status("Diverted-En-Route")
-        db.update_trip_state(self.trip_id, self.state, diverted_flag=True,
-                              destination_hospital_id=proposal["hospital_id"])
-        return proposal
+class PatientVitals:
+    """Patient Telemetry Vitals & Evaluation (Report Fig. 5, Fig. 7)."""
+    def __init__(
+        self,
+        recordId: str,
+        heartRate: int,
+        spO2: int,
+        systolicBP: int,
+        timestamp: Optional[str] = None,
+        isCritical: bool = False,
+    ):
+        self.recordId: str = recordId
+        self.heartRate: int = int(heartRate)
+        self.spO2: int = int(spO2)
+        self.systolicBP: int = int(systolicBP)
+        self.timestamp: str = timestamp or datetime.utcnow().isoformat()
+        self.isCritical: bool = isCritical
 
-    def override_reroute(self, reason: str = "Driver override") -> dict:
-        snapshot = self.pending_proposal
-        self.pending_proposal = None
-        self.last_override_at = time.time()
-        self.state = self.last_vitals.risk_level if self.last_vitals else "Green"
-        self.vehicle.set_status("En-Route")
-        db.update_trip_state(self.trip_id, self.state)
-        return {"declined_hospital_id": snapshot["hospital_id"] if snapshot else None, "reason": reason}
+    def parseHexData(self, hexString: str) -> dict:
+        """Decodes raw hex packet [HR, SpO2, SysBP, Checksum]."""
+        raw = bytes.fromhex(hexString.replace(" ", ""))
+        if len(raw) >= 3:
+            self.heartRate = int(raw[0])
+            self.spO2 = int(raw[1])
+            self.systolicBP = int(raw[2])
+        return {"heartRate": self.heartRate, "spO2": self.spO2, "systolicBP": self.systolicBP}
+
+    def normalizeData(self) -> None:
+        """Clamps vitals to valid human physiological ranges."""
+        self.heartRate = max(30, min(240, self.heartRate))
+        self.spO2 = max(50, min(100, self.spO2))
+        self.systolicBP = max(50, min(250, self.systolicBP))
+
+    def evaluateThresholds(self, hrMax: int = 120, spo2Min: int = 90, bpMax: int = 180) -> bool:
+        """Applies clinical threshold breach rules (US-06, US-07, US-08)."""
+        if self.spO2 < spo2Min or self.heartRate > hrMax or self.systolicBP > bpMax:
+            self.isCritical = True
+        else:
+            self.isCritical = False
+        return self.isCritical
 
     def to_dict(self) -> dict:
         return {
-            "trip_id": self.trip_id,
-            "session_id": self.trip_id,  # backward-compat alias used by the first prototype's frontend
-            "vehicle_id": self.vehicle.vehicle_id,
-            "patient": self.patient.to_dict(),
-            "destination_hospital_id": self.destination_hospital_id,
-            "route": self.route,
-            "risk_level": self.last_vitals.risk_level if self.last_vitals else "Green",
-            "state": self.state,
-            "diverted": self.diverted,
-            "pending_reroute": self.pending_proposal,
-            "last_vitals": self.last_vitals.to_dict() if self.last_vitals else None,
+            "recordId": self.recordId,
+            "heartRate": self.heartRate,
+            "spO2": self.spO2,
+            "systolicBP": self.systolicBP,
+            "timestamp": self.timestamp,
+            "isCritical": self.isCritical,
+        }
+
+
+class RouteEngine:
+    """Graph Routing and Dynamic Pathfinding (Report Fig. 5, Fig. 6)."""
+    def __init__(
+        self,
+        routeId: str,
+        originCoords: Tuple[float, float],
+        destinationCoords: Tuple[float, float],
+        estimatedTime: str = "0 mins",
+    ):
+        self.routeId: str = routeId
+        self.originCoords: Tuple[float, float] = originCoords
+        self.destinationCoords: Tuple[float, float] = destinationCoords
+        self.estimatedTime: str = estimatedTime
+
+    def fetchTrafficSpeeds(self, baseSpeedKmph: float = 40.0, congestionFactor: float = 1.0) -> float:
+        return max(10.0, baseSpeedKmph * congestionFactor)
+
+    def computeDijkstraPath(self, graph: dict, startNode: str, goalNode: str) -> Tuple[List[str], float]:
+        import heapq
+        queue: List[Tuple[float, str, List[str]]] = [(0.0, startNode, [startNode])]
+        visited: Dict[str, float] = {}
+
+        while queue:
+            (cost, current, path) = heapq.heappop(queue)
+            if current in visited and visited[current] <= cost:
+                continue
+            visited[current] = cost
+            if current == goalNode:
+                self.estimatedTime = f"{round(cost, 1)} mins"
+                return path, cost
+
+            for neighbor, weight in graph.get(current, {}).items():
+                if neighbor not in visited:
+                    heapq.heappush(queue, (cost + weight, neighbor, path + [neighbor]))
+        return [], float("inf")
+
+    def generatePolyline(self, coordinates: List[Tuple[float, float]]) -> List[List[float]]:
+        return [[lat, lng] for lat, lng in coordinates]
+
+
+class Equipment:
+    """Hospital Medical Equipment (Report Fig. 5, Fig. 10)."""
+    def __init__(self, equipmentId: str, type: str, status: str = "Operational"):
+        self.equipmentId: str = equipmentId
+        self.type: str = type
+        self.status: str = status  # "Operational" or "Maintenance Needed"
+
+    def isOperational(self) -> bool:
+        return self.status.lower() == "operational"
+
+    def to_dict(self) -> dict:
+        return {"equipmentId": self.equipmentId, "type": self.type, "status": self.status}
+
+
+class Hospital:
+    """Hospital facility entity (Report Fig. 5, Fig. 8)."""
+    def __init__(
+        self,
+        hospitalId: str,
+        name: str,
+        locationLat: float,
+        locationLong: float,
+        icuBedsAvailable: int,
+        equipmentList: Optional[List[Equipment]] = None,
+    ):
+        self.hospitalId: str = hospitalId
+        self.name: str = name
+        self.locationLat: float = float(locationLat)
+        self.locationLong: float = float(locationLong)
+        self.icuBedsAvailable: int = int(icuBedsAvailable)
+        self.equipmentList: List[Equipment] = equipmentList or []
+
+    def checkICUCapacity(self) -> bool:
+        return self.icuBedsAvailable > 0
+
+    def verifyEquipment(self, requiredType: str) -> bool:
+        for eq in self.equipmentList:
+            if eq.type.lower() == requiredType.lower() and eq.isOperational():
+                return True
+        return False
+
+    def to_dict(self) -> dict:
+        return {
+            "hospitalId": self.hospitalId,
+            "name": self.name,
+            "locationLat": self.locationLat,
+            "locationLong": self.locationLong,
+            "icuBedsAvailable": self.icuBedsAvailable,
+            "equipment": [eq.to_dict() for eq in self.equipmentList],
         }
