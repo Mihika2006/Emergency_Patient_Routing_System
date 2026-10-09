@@ -213,7 +213,11 @@ def start_trip(payload: TripStart):
     )
 
     trip_id = vehicle.vehicle_id[:3].upper() + "-" + str(int(time.time()))[-6:]
-    route = ROUTE_ENGINE.calculate_optimal_path(vehicle.current_location, payload.destination_hospital_id)
+    start_node = vehicle.current_location if vehicle.current_location in NODES else "A"
+    dest_node = HOSPITAL_NODES.get(payload.destination_hospital_id, payload.destination_hospital_id)
+    route = ROUTE_ENGINE.calculate_optimal_path(start_node, dest_node)
+
+    # THIS LINE WAS MISSING:
     trip = Trip(trip_id, vehicle, patient, payload.destination_hospital_id, route)
     TRIPS[trip_id] = trip
 
@@ -226,8 +230,6 @@ def start_trip(payload: TripStart):
     )
     db.save_route(trip_id, route["polyline"] if route else [], [])
 
-    # FR-004: maintain a dynamic safety corridor for the whole primary path,
-    # not just a reactive one-shot lookup after a Red alert.
     if route:
         ROUTE_ENGINE.compute_safety_corridor(route["path"], HOSPITALS)
 
@@ -330,32 +332,57 @@ async def propose_reroute(trip_id: str):
 
 @app.post("/api/trips/{trip_id}/confirm_reroute")
 async def confirm_reroute(trip_id: str):
-    """Driver taps 'Confirm Diversion'. Only now does the destination,
-    navigation track and DB change, and only now is the target hospital
-    notified of the inbound diversion (requirement 2)."""
     trip = _require_trip(trip_id)
     if not trip.pending_proposal:
         raise HTTPException(400, "No pending reroute proposal for this trip")
 
+    old_hospital_id = trip.destination_hospital_id
     driver = Driver(user_id="driver-ui", name=trip.vehicle.driver_name or "Driver", vehicle=trip.vehicle)
     confirmed = driver.accept_reroute(trip)
     if not confirmed:
         raise HTTPException(400, "Unable to confirm reroute")
 
-    hospital = HOSPITALS[confirmed["hospital_id"]]
-    hospital.reserve_bay()
-
+    new_hospital = HOSPITALS[confirmed["hospital_id"]]
+    new_hospital.reserve_bay()
     ROUTE_ENGINE.compute_safety_corridor(confirmed["route"]["path"], HOSPITALS)
 
+    # 1. Notify the OLD hospital that the patient was diverted away
+    await manager.broadcast(f"hospital:{old_hospital_id}", {
+        "type": "DIVERSION_CANCELLED",
+        "trip_id": trip.trip_id,
+        "vehicle_id": trip.vehicle.vehicle_id,
+        "new_hospital_name": new_hospital.name,
+        "reason": "Critical vitals drop - diverted to nearest capable trauma facility"
+    })
+
+    # 2. Notify the NEW hospital of the incoming critical patient
     await manager.broadcast(f"hospital:{confirmed['hospital_id']}", {
         "type": "INCOMING_DIVERSION",
-        "trip_id": trip.trip_id, "vehicle_id": trip.vehicle.vehicle_id,
-        "eta_minutes": confirmed["eta_minutes"], "patient": trip.patient.to_dict(),
+        "trip_id": trip.trip_id,
+        "vehicle_id": trip.vehicle.vehicle_id,
+        "eta_minutes": confirmed["eta_minutes"],
+        "patient": trip.patient.to_dict(),
     })
+
+    # 3. Notify the Driver console to update route and UI
     await manager.broadcast(f"driver:{trip.vehicle.vehicle_id}", {
-        "type": "DIVERSION_CONFIRMED", "trip_id": trip.trip_id,
-        "hospital_name": hospital.name, "polyline": confirmed["route"]["polyline"],
+        "type": "DIVERSION_CONFIRMED",
+        "trip_id": trip.trip_id,
+        "hospital_id": confirmed["hospital_id"],
+        "hospital_name": new_hospital.name,
+        "polyline": confirmed["route"]["polyline"],
+        "eta_minutes": confirmed["eta_minutes"],
     })
+
+    # 4. Notify Paramedic console of the new destination
+    await manager.broadcast(f"paramedic:{trip.trip_id}", {
+        "type": "DESTINATION_UPDATED",
+        "trip_id": trip.trip_id,
+        "hospital_id": confirmed["hospital_id"],
+        "hospital_name": new_hospital.name,
+        "triage_level": trip.patient.triage_level
+    })
+
     return trip.to_dict()
 
 
@@ -397,6 +424,48 @@ async def update_position(payload: PositionIn):
             "node": payload.node, "lat": node["lat"], "lng": node["lng"],
         })
     return {"status": "ok", "node": payload.node}
+
+@app.patch("/api/hospitals/{hospital_id}")
+async def update_hospital(hospital_id: str, payload: HospitalStatusUpdate):
+    hospital = HOSPITALS.get(hospital_id)
+    if not hospital:
+        raise HTTPException(404, "Hospital not found")
+    data = payload.dict(exclude_unset=True)
+    field_map = {"icu_beds_available": "icu_beds", "cath_lab_available": "cath_lab_available",
+                 "ventilator_available": "ventilator_available", "current_status": "status"}
+    hospital.update_status(**{field_map[k]: v for k, v in data.items() if k in field_map})
+    AuditLog.record("HOSPITAL_STATUS_UPDATE", details={"hospital_id": hospital_id, **data})
+
+    # RESOURCE CAPACITY CHECK: Check any active trips heading to this hospital
+    for trip_id, trip in TRIPS.items():
+        if trip.destination_hospital_id == hospital_id and not trip.diverted:
+            # Check if hospital can no longer serve this patient's equipment/bed needs
+            if not hospital.check_availability(trip.patient.required_equipment):
+                # Force an emergency reroute proposal due to hospital resource exhaustion
+                proposal = trip.propose_reroute(ROUTE_ENGINE, HOSPITALS, force=True)
+                if proposal:
+                    await manager.broadcast(f"driver:{trip.vehicle.vehicle_id}", {
+                        "type": "REROUTE_ALERT",
+                        "trip_id": trip.trip_id,
+                        "hospital_id": proposal["hospital_id"],
+                        "hospital_name": proposal["hospital_name"],
+                        "eta_minutes": proposal["eta_minutes"],
+                        "polyline": proposal["route"]["polyline"],
+                        "message": f"CRITICAL: {hospital.name} can no longer support required equipment ({', '.join(trip.patient.required_equipment)}). Diversion proposed to {proposal['hospital_name']} (ETA: {proposal['eta_minutes']:.1f} min).",
+                    })
+                    await manager.broadcast(f"paramedic:{trip.trip_id}", {
+                        "type": "DESTINATION_UPDATED",
+                        "trip_id": trip.trip_id,
+                        "hospital_id": proposal["hospital_id"],
+                        "hospital_name": proposal["hospital_name"],
+                        "triage_level": "Critical"
+                    })
+                    AuditLog.record("HOSPITAL_CAPACITY_BREACH", trip.trip_id, trip.vehicle.vehicle_id, {
+                        "revoked_hospital": hospital.name,
+                        "required_equipment": trip.patient.required_equipment
+                    })
+
+    return hospital.to_dict()
 
 
 # ---------------------------------------------------------------------
@@ -457,6 +526,17 @@ async def ws_driver(websocket: WebSocket, vehicle_id: str):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(room, websocket)
+        
+
+@app.websocket("/ws/paramedic/{trip_id}")
+async def ws_paramedic(websocket: WebSocket, trip_id: str):
+    room = f"paramedic:{trip_id}"
+    await manager.connect(room, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(room, websocket)
 
 
 @app.get("/")
@@ -472,3 +552,30 @@ def root():
 _FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 if _FRONTEND.exists():
     app.mount("/app", StaticFiles(directory=_FRONTEND, html=True), name="frontend")
+
+
+class ArrivalIn(BaseModel):
+    vehicle_id: str
+    trip_id: str
+    hospital_id: str
+
+@app.post("/api/trips/arrive")
+async def register_arrival(payload: ArrivalIn):
+    trip = TRIPS.get(payload.trip_id)
+    hospital_name = HOSPITALS[payload.hospital_id].name if payload.hospital_id in HOSPITALS else "Hospital"
+
+    arrival_payload = {
+        "type": "AMBULANCE_ARRIVED",
+        "trip_id": payload.trip_id,
+        "vehicle_id": payload.vehicle_id,
+        "hospital_name": hospital_name,
+        "message": f"Ambulance {payload.vehicle_id} has arrived at {hospital_name}. Patient Handover Initiated."
+    }
+
+    # Broadcast arrival to all 3 endpoints
+    await manager.broadcast(f"driver:{payload.vehicle_id}", arrival_payload)
+    await manager.broadcast(f"hospital:{payload.hospital_id}", arrival_payload)
+    await manager.broadcast(f"paramedic:{payload.trip_id}", arrival_payload)
+
+    AuditLog.record("AMBULANCE_ARRIVED", payload.trip_id, payload.vehicle_id, {"hospital": hospital_name})
+    return {"status": "ARRIVED", "message": arrival_payload["message"]}

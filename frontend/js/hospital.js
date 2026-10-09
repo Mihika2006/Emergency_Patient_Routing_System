@@ -37,12 +37,41 @@ function initMap() {
 }
 
 async function loadGraph() {
-  graph = await Api.get("/api/graph");
-  graph.hospital_nodes.forEach(hid => {
-    const n = graph.nodes[hid];
-    L.circleMarker([n.lat, n.lng], { radius: 8, color: "#f24455", fillColor: "#f24455", fillOpacity: 0.9, weight: 1.5 })
-      .addTo(map).bindTooltip(n.label, { permanent: false });
-  });
+  try {
+    const [graphData, hospitals] = await Promise.all([
+      Api.get("/api/graph"),
+      Api.get("/api/hospitals")
+    ]);
+    graph = graphData;
+
+    // Populate the hospital dropdown with Indore hospitals
+    if (els.hospitalSelect && Array.isArray(hospitals)) {
+      els.hospitalSelect.innerHTML = "";
+      hospitals.forEach(h => {
+        const opt = document.createElement("option");
+        opt.value = h.hospital_id;
+        opt.textContent = `${h.name} (${h.trauma_level || 'Level I'})`;
+        els.hospitalSelect.appendChild(opt);
+      });
+    }
+
+    // Add hospital pins to the map
+    if (Array.isArray(hospitals)) {
+      hospitals.forEach(h => {
+        if (h.lat && h.lng) {
+          L.circleMarker([h.lat, h.lng], { 
+            radius: 8, 
+            color: "#f24455", 
+            fillColor: "#f24455", 
+            fillOpacity: 0.9, 
+            weight: 1.5 
+          }).addTo(map).bindTooltip(h.name, { permanent: false });
+        }
+      });
+    }
+  } catch (err) {
+    logEvent("Failed to load map data: " + err.message, true);
+  }
 }
 
 function bindUI() {
@@ -53,10 +82,14 @@ function bindUI() {
 async function onConnect() {
   const hid = els.hospitalSelect.value;
   state.hospitalId = hid;
-  const n = graph.nodes[hid];
-  map.setView([n.lat, n.lng], 15);
 
   const h = await Api.get("/api/hospitals").then(list => list.find(x => x.hospital_id === hid));
+  if (!h) return;
+
+  if (h.lat && h.lng) {
+    map.setView([h.lat, h.lng], 15);
+  }
+
   els.icuBeds.value = h.icu_beds_available;
   els.cathLab.checked = h.cath_lab_available;
   els.ventilator.checked = h.ventilator_available;
@@ -105,6 +138,44 @@ function onSocketMessage(msg) {
       ambulanceMarker.setLatLng([n.lat, n.lng]);
     }
   }
+
+  if (msg.type === "DIVERSION_CANCELLED") {
+    logEvent(`⚠️ INBOUND PATIENT DIVERTED AWAY: Vehicle ${msg.vehicle_id} was rerouted to ${msg.new_hospital_name}. Reason: ${msg.reason}`, true);
+    if (state.incoming && state.incoming.vehicle_id === msg.vehicle_id) {
+      state.incoming = null;
+      if (els.etaPanel) els.etaPanel.style.display = "none";
+      if (els.patientPanel) els.patientPanel.style.display = "none";
+    }
+  }
+
+  if (msg.type === "AMBULANCE_ARRIVED") {
+    alert(`🚨 INBOUND PATIENT ARRIVED!\n${msg.message}`);
+    logEvent(`🏁 ${msg.message}`, true);
+    if (els.etaValue) els.etaValue.innerHTML = `ARRIVED<span class="unit">Bay 1</span>`;
+  }
+
+  if (msg.type === "AMBULANCE_ARRIVED") {
+    // 1. Stop the running ETA countdown timer permanently
+    clearInterval(state.etaTimer);
+    state.etaTimer = null;
+
+    // 2. Update state and stop future timer recalculations
+    if (state.incoming) {
+      state.incoming.eta_minutes = 0;
+    }
+
+    // 3. Update the UI to clearly show arrived status
+    if (els.etaValue) {
+      els.etaValue.innerHTML = `ARRIVED <span class="unit">Handover Active</span>`;
+      els.etaValue.style.color = "#10b981"; // Clean green
+    }
+    if (els.etaSub) {
+      els.etaSub.textContent = `Vehicle ${msg.vehicle_id} · Handover at Emergency Bay`;
+    }
+
+    alert(`🏁 ARRIVAL NOTIFICATION:\n${msg.message}`);
+    logEvent(`🏁 ${msg.message}`, true);
+  }
 }
 
 function renderPatient(patient) {
@@ -118,16 +189,34 @@ function renderPatient(patient) {
 }
 
 function renderEta() {
+  if (!els.etaPanel || !state.incoming) return;
   els.etaPanel.style.display = "flex";
   const inc = state.incoming;
+
+  // If already arrived, do not start countdown timer
+  if (inc.eta_minutes <= 0) {
+    clearInterval(state.etaTimer);
+    state.etaTimer = null;
+    els.etaValue.innerHTML = `ARRIVED <span class="unit">Handover Active</span>`;
+    els.etaSub.textContent = `Vehicle ${inc.vehicle_id} · Handover at Emergency Bay`;
+    return;
+  }
+
   els.etaPanel.classList.toggle("diverted", !!inc.diverted);
   els.etaValue.innerHTML = `${inc.eta_minutes.toFixed(1)}<span class="unit">min ETA</span>`;
-  els.etaSub.textContent = `Vehicle ${inc.vehicle_id} \u00b7 Session ${inc.session_id}` + (inc.diverted ? " \u00b7 DIVERTED" : "");
+  els.etaSub.textContent = `Vehicle ${inc.vehicle_id} · Session ${inc.session_id}` + (inc.diverted ? " · DIVERTED" : "");
+  
   clearInterval(state.etaTimer);
   state.etaTimer = setInterval(() => {
     const elapsedMin = (Date.now() - inc.receivedAt) / 60000;
     const remaining = Math.max(0, inc.eta_minutes - elapsedMin);
-    els.etaValue.innerHTML = `${remaining.toFixed(1)}<span class="unit">min ETA</span>`;
+    if (remaining <= 0) {
+      clearInterval(state.etaTimer);
+      state.etaTimer = null;
+      els.etaValue.innerHTML = `ARRIVED <span class="unit">Handover Active</span>`;
+    } else {
+      els.etaValue.innerHTML = `${remaining.toFixed(1)}<span class="unit">min ETA</span>`;
+    }
   }, 1000);
 }
 

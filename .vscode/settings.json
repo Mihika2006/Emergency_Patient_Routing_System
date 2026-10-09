@@ -1,0 +1,10 @@
+// {
+//     "liveServer.settings.port": 5501
+// }
+{
+  "liveServer.settings.ignoreFiles": [
+    "**/backend/**",
+    "**/*.db*",
+    "**/*.sqlite*"
+  ]
+}

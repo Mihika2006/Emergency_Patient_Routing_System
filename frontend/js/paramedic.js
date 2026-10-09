@@ -45,6 +45,28 @@ function onLoadSession() {
   logEvent(`Linked to trip ${id}.`);
 }
 
+async function onLinkSession() {
+  const tripId = els.sessionIdInput.value.trim();
+  if (!tripId) return alert("Enter Trip ID");
+
+  state.tripId = tripId;
+
+  // Connect WebSocket for real-time dispatch updates
+  connectSocket(`/ws/paramedic/${tripId}`, (msg) => {
+    if (msg.type === "DESTINATION_UPDATED") {
+      logEvent(`🚨 CRITICAL DIVERSION CONFIRMED: Route redirected to ${msg.hospital_name}!`, true);
+      const banner = document.getElementById("active-hospital-label") || els.patientMeta;
+      if (banner) banner.textContent = `Destination: ${msg.hospital_name} (Critical)`;
+    }
+    if (msg.type === "AMBULANCE_ARRIVED") {
+      alert(`🏁 ARRIVAL NOTIFICATION:\n${msg.message}`);
+      logEvent(msg.message, true);
+    }
+  });
+
+  logEvent(`Linked to trip ${tripId}.`);
+}
+
 function onToggleBle() {
   state.ble = !state.ble;
   els.bleStatus.textContent = state.ble ? "Connected: PulseOximeter_01" : "Not connected";
@@ -82,6 +104,12 @@ async function sendVitals(manual = false) {
     if (manual) logEvent(`Vitals sent: HR ${payload.heart_rate}, SpO2 ${payload.spo2}%`);
   } catch (e) {
     logEvent("Failed to send vitals -- is the backend running?", true);
+  }
+
+  if (vitals.spo2 < 90 || vitals.hr > 120) {
+  logEvent(`CRITICAL VITALS STREAMED -- SpO2: ${vitals.spo2}%, HR: ${vitals.hr} bpm [RED ALERT]`, true);
+  } else {
+  logEvent(`Vitals sent: HR ${vitals.hr}, SpO2 ${vitals.spo2}%`);
   }
 }
 

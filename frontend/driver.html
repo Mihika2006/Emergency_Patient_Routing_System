@@ -11,7 +11,7 @@
 
 <div class="topbar">
   <div class="brand">
-    <span class="mark">RET-RP</span>
+    <span class="mark">Emergency Patient Routing System : </span>
     <span class="portal-name">Driver Console</span>
   </div>
   <div class="status-chip"><span class="dot live"></span> Ambulance Telematics</div>
@@ -84,7 +84,7 @@
         <label>Driver name</label>
         <input type="text" id="driverName" placeholder="Optional" />
       </div>
-      <button class="primary block" id="registerBtn">Register Vehicle</button>
+      <button type="button" class="primary block" onclick="event.preventDefault(); onRegister(event)">Register Vehicle</button>
 
       <hr style="border-color:var(--navy-700); margin:18px 0;" />
 
@@ -107,7 +107,7 @@
         <input type="text" id="chiefComplaint" placeholder="e.g. chest pain / respiratory distress" />
         <div class="small-muted" style="margin-top:4px;">Used to infer required ER equipment (cath lab / ventilator) for reroute matching.</div>
       </div>
-      <button class="block" id="startSessionBtn" disabled>Start Patient Transport Trip</button>
+      <button type="button" class="block" id="startSessionBtn" disabled>Start Patient Transport Trip</button>
 
       <div id="sessionInfo" style="display:none; margin-top:14px;">
         <div class="small-muted">Active Trip ID (share with Paramedic console)</div>

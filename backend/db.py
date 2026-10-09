@@ -1,13 +1,4 @@
-"""
-db.py
------
-Lightweight SQLite persistence layer (per SRS 3.4 Logical Database
-Requirements). Uses only the Python standard library (sqlite3) so the
-whole backend runs with zero extra native dependencies.
 
-Tables map directly onto the SRS data dictionary:
-  vehicle, patient_session, vital_log, hospital, route_log, audit_log
-"""
 
 import json
 import sqlite3

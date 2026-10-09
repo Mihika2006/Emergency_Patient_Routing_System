@@ -194,7 +194,7 @@ class Hospital:
 class Ambulance:
     def __init__(self, vehicle_id: str, plate_number: str = None, capability_tier: str = "ALS",
                  driver_name: str = None, fleet_type: str = "Public",
-                 status: str = "Available", current_location: str = "N1", speed: float = 0):
+                 status: str = "Available", current_location: str = "A", speed: float = 0):
         self.vehicle_id = vehicle_id
         self.plate_number = plate_number or vehicle_id
         self.capability_tier = capability_tier
@@ -216,11 +216,12 @@ class Ambulance:
     def get_status(self) -> str:
         return self.status
 
-    def set_status(self, status: str):
+    def set_status(self, status: str) -> None:
         self.status = status
-        db.update_vehicle_position(self.vehicle_id, NODES[self.current_location]["lat"],
-                                    NODES[self.current_location]["lng"], self.current_location, status=status)
-
+        loc = self.current_location if self.current_location in NODES else "A"
+        db.update_vehicle_position(self.vehicle_id, NODES[loc]["lat"],
+                                   NODES[loc]["lng"], loc, status)
+        
     def to_dict(self) -> dict:
         return {
             "vehicle_id": self.vehicle_id, "plate_number": self.plate_number,
@@ -250,11 +251,6 @@ class RouteEngine:
     def find_fallback_hospital(self, current_node: str, hospitals: Dict[str, Hospital],
                                 required_equipment: List[str] = None,
                                 exclude: List[str] = None) -> List[dict]:
-        """Edge Case 1: rank only hospitals that pass check_availability()
-        (open bed + required equipment); hospitals that fail -- e.g. the
-        geometrically nearest one being full -- are bypassed entirely
-        rather than ranked last.
-        """
         exclude = set(exclude or [])
         eligible = {
             hid: h for hid, h in hospitals.items()
@@ -262,7 +258,10 @@ class RouteEngine:
         }
         ranked = []
         for hid, hospital in eligible.items():
-            route = self.calculate_optimal_path(current_node, hid)
+            # Translate hospital ID to its graph node
+            target_node = HOSPITAL_NODES.get(hid, hospital.node)
+            start = current_node if current_node in NODES else "A"
+            route = self.calculate_optimal_path(start, target_node)
             if route:
                 ranked.append({
                     "hospital_id": hid,
