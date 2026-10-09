@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emergency Patient Routing System : Driver Console</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    .form-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .form-grid-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+    }
+    .metrics-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .metric-pill {
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .metric-pill .lbl {
+      font-size: 9.5px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .metric-pill .val {
+      font-size: 16px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: var(--primary);
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Top Navigation Header -->
+  <header class="top-header">
+    <div class="brand">
+      Emergency Patient Routing System <span>: Driver Console</span>
+    </div>
+    <div id="connection-badge" class="connection-badge">
+      Connecting to telemetry bus...
+    </div>
+  </header>
+
+  <main class="main-wrapper">
+    <div class="dashboard-grid">
+      <!-- Left Column: Navigation Route Map -->
+      <div class="left-panel">
+        <div class="card-panel" style="padding: 14px;">
+          <div class="card-panel-header">
+            <span>Navigation Route — OpenStreetMap</span>
+            <span id="nav-status-badge" class="badge-status">STATIONARY</span>
+          </div>
+
+          <div id="driver-map" class="map-container"></div>
+
+          <!-- Real-time Live Transit Metrics -->
+          <div class="metrics-bar">
+            <div class="metric-pill">
+              <div class="lbl">Vehicle Speed</div>
+              <div class="val" id="disp-speed">0 <span style="font-size: 10px; font-weight: normal; color: var(--text-muted);">km/h</span></div>
+            </div>
+            <div class="metric-pill">
+              <div class="lbl">Estimated Time</div>
+              <div class="val" id="disp-eta">12 <span style="font-size: 10px; font-weight: normal; color: var(--text-muted);">mins</span></div>
+            </div>
+            <div class="metric-pill">
+              <div class="lbl">Distance to ER</div>
+              <div class="val" id="disp-dist">4.2 <span style="font-size: 10px; font-weight: normal; color: var(--text-muted);">km</span></div>
+            </div>
+            <div class="metric-pill">
+              <div class="lbl">Telemetry Sync</div>
+              <div class="val" id="disp-sync" style="color: var(--primary); font-size: 13px;">ACTIVE</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- In-Cabin Patient Repeater Card -->
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>In-Cabin Patient Telemetry Repeater</span>
+            <span id="driver-triage-badge" class="badge-status">GREEN</span>
+          </div>
+          <div class="vitals-summary-grid">
+            <div class="vital-box">
+              <div class="vital-label">Heart Rate</div>
+              <div class="vital-val" id="driver-hr">75 <span class="unit">bpm</span></div>
+            </div>
+            <div class="vital-box">
+              <div class="vital-label">SpO2</div>
+              <div class="vital-val" id="driver-spo2">98 <span class="unit">%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Dispatch Configuration, Patient Profile, Controls, & Log -->
+      <div class="right-panel">
+        <!-- Vehicle & Fleet Configuration Card -->
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Vehicle &amp; Dispatch Setup</span>
+          </div>
+
+          <div class="form-field">
+            <label for="select-destination">Destination Hospital</label>
+            <select id="select-destination" class="input-select">
+              <option value="HOSP_MY">MY Hospital (Maharaja Yeshwantrao)</option>
+              <option value="HOSP_BOMBAY">Bombay Hospital Indore</option>
+              <option value="HOSP_MEDANTA">Medanta Hospital Indore</option>
+              <option value="HOSP_CHL">CHL Hospital (LIG Square)</option>
+              <option value="HOSP_APOLLO">Apollo Hospitals Indore</option>
+              <option value="HOSP_CHOITHRAM">Choithram Hospital &amp; Research Centre</option>
+              <option value="HOSP_SHALBY">Shalby Multispecialty Hospital</option>
+              <option value="HOSP_APPLE">Apple Hospital (Bhanwarkuan)</option>
+              <option value="HOSP_GK">Greater Kailash Hospital</option>
+              <option value="HOSP_INDEX">Index Medical College Hospital</option>
+            </select>
+          </div>
+
+          <div class="form-field">
+            <label for="input-vehicle-id">Ambulance Unit ID</label>
+            <input type="text" id="input-vehicle-id" class="input-text" value="AMB-108-IND" placeholder="e.g. AMB-108-IND">
+          </div>
+
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="select-fleet-type">Fleet Type</label>
+              <select id="select-fleet-type" class="input-select">
+                <option value="Public">Public (Govt/108)</option>
+                <option value="Private">Private Facility</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label for="select-capability-tier">Capability Tier</label>
+              <select id="select-capability-tier" class="input-select">
+                <option value="ALS">ALS (Advanced)</option>
+                <option value="BLS">BLS (Basic)</option>
+                <option value="MICU">MICU (Mobile ICU)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Optional Patient Information Card -->
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Patient Profile (Optional)</span>
+          </div>
+
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="input-patient-name">Patient Name</label>
+              <input type="text" id="input-patient-name" class="input-text" value="Rahul Verma" placeholder="Name">
+            </div>
+            <div class="form-field">
+              <label for="input-patient-age">Age</label>
+              <input type="number" id="input-patient-age" class="input-text" value="45" min="1" max="120" placeholder="Age">
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label for="input-patient-desc">Clinical Description / Complaint</label>
+            <input type="text" id="input-patient-desc" class="input-text" value="Acute Chest Pain &amp; Dyspnea" placeholder="Symptoms">
+          </div>
+
+          <button id="btn-save-dispatch" class="btn btn-dark" style="margin-top: 6px;">
+            Save &amp; Update Dispatch
+          </button>
+        </div>
+
+        <!-- Transit Simulation Controls -->
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Transit Controls</span>
+          </div>
+          <button id="btn-start-transit" class="btn btn-primary">
+            Start Emergency Transit
+          </button>
+        </div>
+
+        <!-- Navigation Activity Log Card -->
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Navigation Log</span>
+          </div>
+          <div id="driver-log" class="activity-log-window"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 1-Tap Audio-Visual Reroute Prompt Modal (US-15, US-16) -->
+  <div id="reroute-modal" class="modal-overlay hidden">
+    <div class="reroute-modal-card">
+      <div class="alert-tag">CRITICAL RED ALERT</div>
+      <div class="alert-title">Emergency Diversion Recommended</div>
+      <div class="alert-desc" id="modal-reroute-reason">
+        Vital signs threshold breach: SpO2 &lt; 90% or HR &gt; 120. Immediate tertiary care required.
+      </div>
+
+      <div class="detail-box">
+        <div class="detail-row">
+          <span class="lbl">Recommended Facility</span>
+          <span class="val" id="modal-hospital-name">Medanta Hospital Indore</span>
+        </div>
+        <div class="detail-row">
+          <span class="lbl">ICU Readiness</span>
+          <span class="val" id="modal-icu-beds">5 Beds Available</span>
+        </div>
+        <div class="detail-row">
+          <span class="lbl">Critical Care Equipment</span>
+          <span class="val">Ventilator + Cath Lab Operational</span>
+        </div>
+      </div>
+
+      <div class="modal-actions-grid">
+        <button id="btn-accept-reroute" class="btn btn-primary">
+          Accept Diversion
+        </button>
+        <button id="btn-decline-reroute" class="btn btn-outline">
+          Decline
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/driver.js"></script>
+</body>
+</html>

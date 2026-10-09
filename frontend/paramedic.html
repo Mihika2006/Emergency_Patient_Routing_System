@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emergency Patient Routing System : Paramedic Console</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <header class="top-header">
+    <div class="brand">
+      Emergency Patient Routing System <span>: Paramedic Console</span>
+    </div>
+    <div id="connection-badge" class="connection-badge">
+      Connecting to telemetry bus...
+    </div>
+  </header>
+
+  <main class="main-wrapper">
+    <div class="dashboard-grid">
+      <div class="left-panel">
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Patient Vitals</span>
+            <span id="triage-badge" class="badge-status">GREEN</span>
+          </div>
+          <div class="vitals-summary-grid">
+            <div class="vital-box">
+              <div class="vital-label">Heart Rate</div>
+              <div class="vital-val" id="disp-hr">82 <span class="unit">bpm</span></div>
+            </div>
+            <div class="vital-box">
+              <div class="vital-label">SpO2</div>
+              <div class="vital-val" id="disp-spo2">98 <span class="unit">%</span></div>
+            </div>
+            <div class="vital-box">
+              <div class="vital-label">Blood Pressure</div>
+              <div class="vital-val" id="disp-bp">118 / 76 <span class="unit">mmHg</span></div>
+            </div>
+            <div class="vital-box">
+              <div class="vital-label">Triage Priority</div>
+              <div class="vital-val" id="disp-triage">Stable</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Manual Vitals Input</span>
+          </div>
+
+          <div class="form-field">
+            <div class="input-group-text">
+              <span>Heart rate</span>
+              <span id="val-slider-hr" class="curr-val">82 bpm</span>
+            </div>
+            <input type="range" min="40" max="180" value="82" class="range-slider" id="slider-hr">
+          </div>
+
+          <div class="form-field">
+            <div class="input-group-text">
+              <span>SpO2</span>
+              <span id="val-slider-spo2" class="curr-val">98 %</span>
+            </div>
+            <input type="range" min="70" max="100" value="98" class="range-slider" id="slider-spo2">
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+            <div class="form-field">
+              <div class="input-group-text">
+                <span>Systolic BP</span>
+                <span id="val-slider-sbp" class="curr-val">118 mmHg</span>
+              </div>
+              <input type="range" min="70" max="220" value="118" class="range-slider" id="slider-sbp">
+            </div>
+
+            <div class="form-field">
+              <div class="input-group-text">
+                <span>Diastolic BP</span>
+                <span id="val-slider-dbp" class="curr-val">76 mmHg</span>
+              </div>
+              <input type="range" min="40" max="130" value="76" class="range-slider" id="slider-dbp">
+            </div>
+          </div>
+
+          <button id="btn-sync-vitals" class="btn btn-primary" style="margin-top: 14px;">
+            Sync Vitals to Hospital
+          </button>
+
+          <div class="toggle-row" style="margin-top: 12px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+            <span class="toggle-label">Auto-stream vitals (Simulated BLE feed)</span>
+            <label class="switch">
+              <input type="checkbox" id="toggle-autostream" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card-panel" style="background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.3);">
+          <button id="btn-manual-reroute" class="btn btn-danger">
+            Manual Emergency Reroute Trigger
+          </button>
+          <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.4;">
+            Paramedic.triggerManualReroute() — use when a patient shows physical distress not yet reflected in streamed vitals. The driver still must confirm before the destination changes.
+          </p>
+        </div>
+      </div>
+
+      <div class="right-panel">
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Session &amp; Vehicle Sync</span>
+            <span id="session-sync-badge" class="badge-status">LINKED</span>
+          </div>
+          <div class="form-field">
+            <label for="trip-id-input">Active Trip ID (from Driver console)</label>
+            <input type="text" id="trip-id-input" class="input-text" value="AMB-108-IND" placeholder="e.g. AMB-002913">
+          </div>
+          <button id="btn-link-session" class="btn btn-dark" style="margin-top: 4px; margin-bottom: 12px;">
+            Link Session
+          </button>
+
+          <!-- Synchronized Trip Details from Driver -->
+          <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.7; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+            <div>Target ER: <strong style="color: var(--primary);" id="paramedic-dest">MY Hospital</strong></div>
+            <div>Transit ETA: <strong style="color: var(--primary); font-family: var(--font-mono);" id="paramedic-eta">12 mins</strong></div>
+            <div>Fleet / Tier: <span style="color: var(--text-main);" id="paramedic-tier">ALS · Public</span></div>
+            <div>Patient: <span style="color: var(--text-main);" id="paramedic-patient">Rahul Verma (45y) — Acute Chest Pain</span></div>
+          </div>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>BLE Sensor</span>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;" id="sensor-status-label">
+            Status: Disconnected
+          </div>
+          <button id="btn-connect-sensor" class="btn btn-dark">
+            Connect BLE Sensor
+          </button>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Activity Log</span>
+          </div>
+          <div id="paramedic-log" class="activity-log-window"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/paramedic.js"></script>
+</body>
+</html>

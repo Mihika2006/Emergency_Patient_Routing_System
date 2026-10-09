@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emergency Patient Routing System : Hospital ER Console</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+  <header class="top-header">
+    <div class="brand">
+      Emergency Patient Routing System <span>: Hospital ER Console</span>
+    </div>
+    <div id="connection-badge" class="connection-badge">
+      Connecting to telemetry bus...
+    </div>
+  </header>
+
+  <main class="main-wrapper">
+    <div class="dashboard-grid">
+      <div class="left-panel">
+        <div class="card-panel" style="padding: 14px;">
+          <div class="card-panel-header">
+            <span>Incident Map</span>
+            <span id="hospital-live-status" class="badge-status">MONITORING</span>
+          </div>
+          <div id="hospital-map" class="map-container"></div>
+        </div>
+      </div>
+
+      <div class="right-panel">
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>This Dashboard Represents</span>
+          </div>
+          <div class="form-field">
+            <label for="select-hospital">Hospital</label>
+            <select id="select-hospital" class="input-select">
+              <option value="HOSP_MY">MY Hospital (Maharaja Yeshwantrao)</option>
+              <option value="HOSP_BOMBAY">Bombay Hospital Indore</option>
+              <option value="HOSP_MEDANTA">Medanta Hospital Indore</option>
+              <option value="HOSP_CHL">CHL Hospital (LIG Square)</option>
+              <option value="HOSP_APOLLO">Apollo Hospitals Indore</option>
+              <option value="HOSP_CHOITHRAM">Choithram Hospital & Research Centre</option>
+              <option value="HOSP_SHALBY">Shalby Multispecialty Hospital</option>
+              <option value="HOSP_APPLE">Apple Hospital (Bhanwarkuan)</option>
+              <option value="HOSP_GK">Greater Kailash Hospital</option>
+              <option value="HOSP_INDEX">Index Medical College Hospital</option>
+            </select>
+          </div>
+          <button id="btn-connect-dashboard" class="btn btn-primary" style="margin-top: 10px;">
+            Connect Dashboard
+          </button>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Bed & Trauma Bay Readiness</span>
+          </div>
+
+          <div class="form-field">
+            <label for="input-icu-beds">ICU beds available</label>
+            <input type="number" id="input-icu-beds" class="input-text" value="4" min="0" max="50">
+          </div>
+
+          <div class="toggle-row">
+            <span class="toggle-label">Cath lab available</span>
+            <label class="switch">
+              <input type="checkbox" id="toggle-cath-lab" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="toggle-row">
+            <span class="toggle-label">Ventilator available</span>
+            <label class="switch">
+              <input type="checkbox" id="toggle-ventilator" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="form-field" style="margin-top: 8px;">
+            <label for="select-readiness-status">Overall status</label>
+            <select id="select-readiness-status" class="input-select">
+              <option value="Ready">Ready</option>
+              <option value="Full Capacity">Full Capacity</option>
+              <option value="Diversion Only">Diversion Only</option>
+            </select>
+          </div>
+
+          <button id="btn-save-readiness" class="btn btn-dark" style="margin-top: 10px;">
+            Save Readiness
+          </button>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Regional Fleet-Agnostic Overview</span>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted); line-height: 1.7;" id="fleet-overview-text">
+            <div>Inbound Vehicle: <strong style="color: var(--text-main);" id="fleet-vehicle-id">AMB-108-IND</strong> <span id="fleet-tier-tag" style="font-size: 10px; font-family: var(--font-mono); color: var(--primary); padding: 1px 6px; background: var(--primary-subtle); border-radius: 3px; margin-left: 4px;">ALS · Public</span></div>
+            <div>Target Facility: <strong style="color: var(--primary);" id="fleet-target-facility">MY Hospital</strong></div>
+            <div>Estimated Time of Arrival: <strong style="color: var(--primary); font-family: var(--font-mono);" id="fleet-eta">12 mins</strong></div>
+            <div>Patient: <span style="color: var(--text-main);" id="fleet-patient-info">Rahul Verma (45y) — Acute Chest Pain</span></div>
+            <div>Incoming Vitals: <span style="font-family: var(--font-mono); color: var(--text-main);" id="fleet-vitals">HR 75 / SpO2 98%</span></div>
+          </div>
+        </div>
+
+        <div class="card-panel">
+          <div class="card-panel-header">
+            <span>Incident Log</span>
+          </div>
+          <div id="hospital-log" class="activity-log-window"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/hospital.js"></script>
+</body>
+</html>
